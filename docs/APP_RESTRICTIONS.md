@@ -128,6 +128,45 @@ menos una versión intermedia. Conservar registros por modelo y versión de One 
     comprobar desbloqueo antes de retirar la personalización.
 12. Revisar usuarios adicionales, depuración y tiendas distintas de las incluidas.
 
+## Continuar la prueba de concepto mediante ADB
+
+En una tablet de laboratorio configurada normalmente, sin cuentas, instalar el
+APK propio y activarlo como Device Owner con ADB:
+
+```bash
+adb install -r app-debug.apk
+adb shell dpm set-device-owner \
+  com.mdmesh.agent.debug/com.mdmesh.agent.admin.AdminReceiver
+```
+
+Si ya está instalado y activo como Device Owner, conservarlo. El auxiliar debe
+estar firmado con la misma clave que el agente; no recompilarlo en otro equipo
+con una clave debug distinta. La activación como Device Owner por ADB es un
+procedimiento de laboratorio, no confirma aceptación por QR.
+
+Compilar `:app:assembleDebugAndroidTest`. Copiar el APK resultante a
+`MDMesh-enrolamiento-adb.apk` y `scripts/enroll-adb.py` al mismo directorio en el
+equipo conectado a la tablet (o pasar el APK con `--helper`). En la consola,
+Enroll → Token, seleccionar la configuración de prueba y generar un token nuevo.
+Ejecutar `python3 enroll-adb.py`: instala el auxiliar, solicita la URL HTTPS de
+la consola y el token mediante entrada oculta, y ejecuta únicamente el bootstrap
+manual. Con varias tablets, seleccionar una con `--serial`.
+
+El auxiliar exige Device Owner y que no existan credenciales de enrolamiento.
+Guarda servidor y token y encola el CheckInWorker real, que usa el mismo mutex
+del agente para el token de un solo uso. Espera hasta dos minutos por device id
+y secret persistidos, sin mostrarlos. No permite cambiar el servidor de un
+agente ya enrolado. `OK (1 test)` confirma estas credenciales; revisar también el
+dispositivo y sus outcomes en la consola. Si falla, inspeccionar el error y
+CheckInWorker antes de reintentar: no borrar identidad ni reutilizar un token
+que el servidor pueda haber consumido.
+
+Abrir MDM Agent para mantener el canal y completar el check-in. Empezar con ambos
+bloqueos Off y seguir la prueba de aceptación. Tras conectar y verificar el agente,
+se puede retirar el auxiliar con `adb uninstall com.mdmesh.agent.debug.test`.
+El auxiliar no introduce un componente exportado en el APK de producción y no
+se distribuye a la flota. No registrar tokens ni compartirlos en el chat.
+
 ## Diagnóstico de los callbacks de enrolamiento
 
 **Aprobación del DPC:** Google documenta que un DPC no aprobado por Android
