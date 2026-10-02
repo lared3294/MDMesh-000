@@ -52,7 +52,10 @@ android {
     buildTypes {
         getByName("debug") {
             applicationIdSuffix = ".debug"
-            isDebuggable = true
+            // Lab probe: keep the debug package/key/code and disable only app debugging.
+            // This tests the QR setup path independently of release shrinking/signing.
+            isDebuggable = !providers.gradleProperty("provisioningProbe")
+                .map(String::toBoolean).getOrElse(false)
             signingConfig = signingConfigs.getByName("debug")
             buildConfigField("String", "MDM_BASE_URL", "\"https://mdm.local/\"")
         }

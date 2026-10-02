@@ -153,6 +153,22 @@ Un resultado `OK (2 tests)` valida estos callbacks en la tablet; no confirma
 que el enrolamiento completo por QR funcione. Guardar también el logcat si falla.
 El APK de pruebas no se distribuye a la flota.
 
+Si ambos callbacks pasan, se puede aislar el atributo `debuggable` mediante un
+APK de laboratorio que conserva el paquete `.debug`, la misma clave de firma,
+los SDK y el código sin minificar:
+
+```bash
+./gradlew :app:assembleDebug -PprovisioningProbe=true -PversionCode=17
+```
+
+El resultado sigue en `app/build/outputs/apk/debug/app-debug.apk`. Esta opción
+desactiva la depuración de la aplicación; no crea una release de producción.
+Copiarlo con un nombre propio para evitar confundirlo con el APK debug anterior.
+Puede reemplazar el archivo alojado para el QR manteniendo componente y checksum
+de firma, después de verificar la firma y el nuevo SHA-256 del archivo servido.
+Probar con un QR nuevo y una tablet restablecida. El resultado de este ensayo
+determina si el atributo influye en el fallo; no es una reparación confirmada.
+
 ## Referencias Android
 
 - [Restricciones del usuario](https://developer.android.com/reference/android/os/UserManager)
