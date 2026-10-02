@@ -107,6 +107,15 @@ que deben conservar los agentes de esta prueba de concepto.
 
 ## Prueba de aceptación
 
+Para quitar una app de una tablet, abrir Devices → dispositivo → Control →
+Destructive → Uninstall app. Introducir el paquete Android (visible en el
+catálogo Apps), revisar el dispositivo y confirmar. Se encola `app.uninstall`;
+verificar que su resultado sea `done` en el historial. Cancelar no encola nada.
+La acción impide seleccionar los paquetes conocidos del propio agente MDMesh.
+Retirar también la asignación Install de esa app en la configuración si no se
+quiere que un posterior sync de apps la reinstale. `Do not install` en la
+configuración detiene instalaciones; no es un comando de desinstalación.
+
 Usar una configuración exclusiva de laboratorio en Android 8, Android 16 y al
 menos una versión intermedia. Conservar registros por modelo y versión de One UI.
 
