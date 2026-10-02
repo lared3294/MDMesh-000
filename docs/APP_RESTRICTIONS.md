@@ -130,6 +130,21 @@ menos una versión intermedia. Conservar registros por modelo y versión de One 
 
 ## Diagnóstico de los callbacks de enrolamiento
 
+**Aprobación del DPC:** Google documenta que un DPC no aprobado por Android
+Enterprise puede ser bloqueado durante el enrolamiento. Un APK con firma válida,
+Device Owner aceptado por ADB y callbacks correctos no demuestra que sea aceptado
+por el asistente QR. No asumir que un fork con paquete/firma propios hereda la
+aprobación del agente original. Consultar la
+[política de DPCs aprobados](https://support.google.com/work/android/answer/16694822)
+y la [guía de Play Protect para desarrolladores](https://developers.google.com/android/play-protect/warning-dev-guidance#android-enterprise-dpc-enrollment).
+Es distinta de la verificación general de identidad de desarrolladores. El
+error genérico de Samsung no confirma por sí solo que sea este bloqueo.
+
+En SM-X236B Android 16 se confirmó: APK instalado/abierto por ADB, Device Owner
+por ADB y ambos callbacks correctos. El QR sigue fallando con la variante no
+debuggable. La aprobación durante enrolamiento queda como hipótesis prioritaria;
+no se ha verificado el estado de aprobación de esta compilación ni del oficial.
+
 Si la instalación y el arranque normales funcionan pero el QR falla al preparar
 la configuración, probar los callbacks en una tablet de laboratorio con el agente
 debug como Device Owner. Esta prueba no reproduce la descarga, la verificación
