@@ -49,6 +49,7 @@ export async function scanApps(deviceId: number | string, signal?: AbortSignal):
 }
 
 export interface ScanSnapshot {
+  includeAll?: boolean;
   apps: AppInfo[];
   scannedAt?: number;
 }
@@ -58,16 +59,19 @@ export interface ScanSnapshot {
  * durably stored per device in the command's detail). Returns null if the device was never scanned,
  * so the picker can show the saved list instantly instead of re-scanning every time.
  */
-export async function getLatestScan(deviceId: number | string): Promise<ScanSnapshot | null> {
+export async function getLatestScan(deviceId: number | string, includeAll = false): Promise<ScanSnapshot | null> {
   const hist = await listCommandHistory(deviceId).catch(() => []); // newest-first (id DESC)
-  const scan = hist.find((c) => c.type === 'apps.scan' && c.status === 'done' && !!c.detail);
-  if (!scan?.detail) return null;
-  try {
-    const apps = (JSON.parse(scan.detail).apps ?? []) as AppInfo[];
-    return apps.length ? { apps, scannedAt: scan.completedAt } : null;
-  } catch {
-    return null;
+  for (const scan of hist) {
+    if (scan.type !== 'apps.scan' || scan.status !== 'done' || !scan.detail) continue;
+    try {
+      const parsed = JSON.parse(scan.detail) as ScanSnapshot;
+      if (includeAll && !parsed.includeAll) continue;
+      if (!Array.isArray(parsed.apps)) continue;
+      const apps = includeAll ? parsed.apps : parsed.apps.filter((a) => a.launchable);
+      return { apps, includeAll: !!parsed.includeAll, scannedAt: scan.completedAt };
+    } catch { /* skip malformed results */ }
   }
+  return null;
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -102,4 +106,16 @@ export async function fetchIcons(
     onBatch?.(got);
   }
   return out;
+}
+
+/** Explicit full inventory. Older agents must not silently appear to report all packages. */
+export async function scanInstalledApps(deviceId: number | string, signal?: AbortSignal): Promise<ScanSnapshot> {
+  const detail = await runForResult(deviceId, {
+    type: 'apps.scan', payload: JSON.stringify({ includeAll: true }),
+  }, 75000, signal);
+  const parsed = JSON.parse(detail || '{}') as ScanSnapshot;
+  if (!parsed.includeAll || !Array.isArray(parsed.apps)) {
+    throw new Error('Update the device agent to support the full installed-app inventory.');
+  }
+  return { ...parsed, scannedAt: Date.now() };
 }

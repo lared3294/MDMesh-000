@@ -1,0 +1,86 @@
+import { useEffect, useRef, useState } from 'react';
+import { getLatestScan, scanInstalledApps, type AppInfo, type ScanSnapshot } from '../api/deviceApps';
+import { ACTION_TEMPLATES } from '../api/commands';
+import { fmtDateTime } from '../ui/format';
+
+export function DeviceAppsPanel({ device, onUninstall }: {
+  device: { number: string };
+  onUninstall: (pkg: string) => void;
+}) {
+  const [snapshot, setSnapshot] = useState<ScanSnapshot | null>(null);
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [showSystem, setShowSystem] = useState(false);
+  const controller = useRef<AbortController | null>(null);
+  const uninstall = ACTION_TEMPLATES.find((t) => t.key === 'app-uninstall')!;
+
+  useEffect(() => {
+    let mounted = true;
+    setSnapshot(null);
+    setBusy(true);
+    setError(null);
+    void getLatestScan(device.number, true).then((scan) => {
+      if (mounted) { setSnapshot(scan); setBusy(false); }
+    });
+    return () => { mounted = false; controller.current?.abort(); };
+  }, [device.number]);
+
+  async function refresh() {
+    const request = new AbortController();
+    controller.current = request;
+    setBusy(true);
+    setError(null);
+    try {
+      const scan = await scanInstalledApps(device.number, request.signal);
+      if (!request.signal.aborted) setSnapshot(scan);
+    } catch (e) {
+      if (!request.signal.aborted) setError(e instanceof Error ? e.message : 'Scan failed.');
+    } finally {
+      if (!request.signal.aborted) setBusy(false);
+    }
+  }
+
+  const term = query.trim().toLocaleLowerCase();
+  const apps = (snapshot?.apps ?? []).filter((a) =>
+    (showSystem || !a.system) && `${a.label} ${a.pkg}`.toLocaleLowerCase().includes(term),
+  );
+  const installed = snapshot?.apps.filter((a) => !a.system).length ?? 0;
+  function removalReason(app: AppInfo): string | null {
+    if (app.system) return 'System apps cannot be removed with this action.';
+    return uninstall.validate?.({ packageName: app.pkg }) ?? null;
+  }
+
+  return (
+    <div className="panel">
+      <div className="device-apps-head">
+        <h2 className="panel-title">Installed apps</h2>
+        <button className="btn btn-primary" disabled={busy} onClick={() => void refresh()}>
+          {busy ? 'Loading…' : 'Refresh inventory'}
+        </button>
+      </div>
+      <p className="muted">Inventory for the Android user managed by MDMesh. Refresh requires the device to be online.</p>
+      {snapshot && <p className="muted">{installed} user apps · {snapshot.apps.length - installed} system apps · Scanned {fmtDateTime(snapshot.scannedAt)}</p>}
+      {busy && <p role="status">Waiting for inventory…</p>}
+      {error && <p className="banner banner-alert" role="alert">{error}</p>}
+      <div className="device-apps-filters">
+        <input className="input" type="search" aria-label="Search installed apps" placeholder="Search by name or package" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <label><input type="checkbox" checked={showSystem} onChange={(e) => setShowSystem(e.target.checked)} /> Show system apps</label>
+      </div>
+      {!snapshot && !busy && <p>No saved inventory. Click Refresh inventory to request it from the device.</p>}
+      {snapshot && <div className="device-apps-table"><table>
+        <thead><tr><th>Application / package</th><th>Version</th><th>Type</th><th>Action</th></tr></thead>
+        <tbody>{apps.map((app) => {
+          const reason = removalReason(app);
+          return <tr key={app.pkg}>
+            <td><strong>{app.label}</strong><div className="mono muted">{app.pkg}</div></td>
+            <td>{app.versionName || '—'}<div className="muted">{app.versionCode ?? ''}</div></td>
+            <td>{app.system ? 'System' : 'User'}</td>
+            <td><button className="btn btn-danger" disabled={!!reason || busy} title={reason ?? `Uninstall ${app.label}`} onClick={() => onUninstall(app.pkg)}>Uninstall</button></td>
+          </tr>;
+        })}</tbody>
+      </table>{!apps.length && <p>No applications match these filters.</p>}</div>}
+      <p className="muted">After installing or uninstalling an app, refresh the inventory to verify the result. Apps assigned Install in the configuration may be installed again by Install config apps.</p>
+    </div>
+  );
+}

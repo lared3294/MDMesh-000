@@ -14,7 +14,11 @@ const GROUPS: Array<{ id: 'safe' | 'disruptive' | 'destructive'; title: string }
   { id: 'destructive', title: 'Destructive' },
 ];
 
-export function ActionConsole({ device }: { device: Device }) {
+export function ActionConsole({ device, uninstallPackage, onUninstallOpened }: {
+  device: Device;
+  uninstallPackage?: string;
+  onUninstallOpened?: () => void;
+}) {
   const toast = useToast();
   const [state, setState] = useState<DeviceState | null>(null);
   const [history, setHistory] = useState<CommandHistoryItem[]>([]);
@@ -67,6 +71,14 @@ export function ActionConsole({ device }: { device: Device }) {
       setBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (!uninstallPackage) return;
+    setActive(ACTION_TEMPLATES.find((t) => t.key === 'app-uninstall') ?? null);
+    setValues({ packageName: uninstallPackage });
+    setConfirmText('');
+    onUninstallOpened?.();
+  }, [uninstallPackage, onUninstallOpened]);
 
   const needsModal = (t: CommandTemplateExt) =>
     (t.params && t.params.length > 0) || !!t.confirm;
