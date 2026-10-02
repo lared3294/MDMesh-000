@@ -14,6 +14,12 @@ import org.junit.Test
 class UserRestrictionsTest {
 
     @Test
+    fun `factory reset restricts only Settings reset and supports fleet SDK floor`() {
+        assertEquals(setOf("no_factory_reset"), UserRestrictions.forKey("factoryReset"))
+        assertEquals(21, UserRestrictions.minSdkForKey("factoryReset"))
+    }
+
+    @Test
     fun `bluetooth maps to the single DISALLOW_BLUETOOTH restriction`() {
         assertEquals(
             setOf(UserRestrictions.DISALLOW_BLUETOOTH),

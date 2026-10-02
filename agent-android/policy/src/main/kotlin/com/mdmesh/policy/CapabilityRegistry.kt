@@ -39,6 +39,7 @@ class CapabilityRegistry(
      * `policy.apply` routing pick it up automatically — no switch to update.
      */
     fun togglePolicies(): Map<String, TogglePolicy> = buildMap {
+        FactoryResetPolicy(handle).takeIf { it.isSupported() }?.let { put(FactoryResetPolicy.CAPABILITY_KEY, it) }
         WifiPolicyFactory.create(handle)?.let { put(WifiPolicy.CAPABILITY_KEY, it) }
         CameraPolicyFactory.create(handle)?.let { put(CameraPolicy.CAPABILITY_KEY, it) }
         ScreenshotsPolicyFactory.create(handle)?.let { put(ScreenshotsPolicy.CAPABILITY_KEY, it) }

@@ -71,6 +71,7 @@ public final class DesiredConfigBuilder {
         putIfManaged(p, "screenshots", cfg.getDisableScreenshots() == null ? null : !cfg.getDisableScreenshots());
         putIfManaged(p, "userAppInstall", cfg.getBlockUserAppInstall() == null ? null : !cfg.getBlockUserAppInstall());
         putIfManaged(p, "userAppUninstall", cfg.getBlockUserAppUninstall() == null ? null : !cfg.getBlockUserAppUninstall());
+        putIfManaged(p, "factoryReset", cfg.getBlockFactoryReset() == null ? null : !cfg.getBlockFactoryReset());
         return p;
     }
 

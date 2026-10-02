@@ -17,6 +17,7 @@ package com.mdmesh.policy
 object UserRestrictions {
 
     // String values mirror android.os.UserManager constants exactly.
+    const val DISALLOW_FACTORY_RESET = "no_factory_reset"
     const val DISALLOW_BLUETOOTH = "no_bluetooth"
     const val DISALLOW_USB_FILE_TRANSFER = "no_usb_file_transfer"
     const val DISALLOW_MOUNT_PHYSICAL_MEDIA = "no_physical_media"
@@ -26,6 +27,7 @@ object UserRestrictions {
      * the capability is not implemented via user restrictions.
      */
     fun forKey(capabilityKey: String): Set<String>? = when (capabilityKey) {
+        "factoryReset" -> setOf(DISALLOW_FACTORY_RESET)
         "bluetooth" -> setOf(DISALLOW_BLUETOOTH)
         "usbStorage" -> setOf(DISALLOW_USB_FILE_TRANSFER, DISALLOW_MOUNT_PHYSICAL_MEDIA)
         else -> null
@@ -44,6 +46,7 @@ object UserRestrictions {
      * for keys this helper does not own.
      */
     fun minSdkForKey(capabilityKey: String): Int? = when (capabilityKey) {
+        "factoryReset" -> 21
         "bluetooth" -> 26
         "usbStorage" -> 21
         else -> null

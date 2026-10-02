@@ -97,6 +97,7 @@ public interface ConfigurationMapper {
             "blockedAppStores=#{blockedAppStores}, " +
             "blockUserAppInstall=#{blockUserAppInstall}, " +
             "blockUserAppUninstall=#{blockUserAppUninstall}, " +
+            "blockFactoryReset=#{blockFactoryReset}, " +
             "autostartForeground=#{autostartForeground}, " +
             "useDefaultDesignSettings=#{useDefaultDesignSettings}, " +
             "timeZone=#{timeZone}, " +

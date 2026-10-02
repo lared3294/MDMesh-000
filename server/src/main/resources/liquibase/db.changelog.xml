@@ -2864,4 +2864,10 @@
         </rollback>
     </changeSet>
 
+    <changeSet id="26.10.02-block-factory-reset-v1" author="local" context="common">
+        <comment>Nullable restriction on factory reset from device Settings; does not disable remote wipe.</comment>
+        <sql>ALTER TABLE configurations ADD COLUMN blockFactoryReset BOOLEAN NULL;</sql>
+        <rollback>ALTER TABLE configurations DROP COLUMN blockFactoryReset;</rollback>
+    </changeSet>
+
 </databaseChangeLog>

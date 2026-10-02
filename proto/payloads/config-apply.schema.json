@@ -10,7 +10,7 @@
     "configurationId": { "type": "integer" },
     "policies": {
       "type": "object", "additionalProperties": { "type": "boolean" },
-      "properties": { "wifi": {"type":"boolean"}, "bluetooth": {"type":"boolean"}, "usbStorage": {"type":"boolean"}, "screenshots": {"type":"boolean"}, "userAppInstall": {"type":"boolean", "description":"false blocks user APK installs and hides blockedAppStores, retaining Device Owner installs"}, "userAppUninstall": {"type":"boolean", "description":"false protects installed packages against user removal"} },
+      "properties": { "factoryReset": {"type":"boolean", "description":"false blocks factory reset from Settings; Device Owner remote wipe remains available"}, "wifi": {"type":"boolean"}, "bluetooth": {"type":"boolean"}, "usbStorage": {"type":"boolean"}, "screenshots": {"type":"boolean"}, "userAppInstall": {"type":"boolean", "description":"false blocks user APK installs and hides blockedAppStores, retaining Device Owner installs"}, "userAppUninstall": {"type":"boolean", "description":"false protects installed packages against user removal"} },
       "description": "Only keys the configuration manages are present. true = allowed/enabled."
     },
     "blockedAppStores": { "type": "array", "items": { "type": "string" }, "description": "Store packages hidden when userAppInstall=false. Absent retains previous list (initially Play/Galaxy Store); empty hides none." },

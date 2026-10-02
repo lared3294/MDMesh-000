@@ -251,3 +251,29 @@ determina si el atributo influye en el fallo; no es una reparación confirmada.
   La migración no se ejecutó contra PostgreSQL: Docker no está activo en este equipo.
 - No se realizaron pruebas de DevicePolicyManager en tablets ni un despliegue.
   Las pruebas JVM usan un backend simulado; no sustituyen el ensayo Samsung anterior.
+
+## Factory reset from device Settings
+
+`blockFactoryReset` is a nullable configuration flag. On blocks factory reset from
+Settings; Off clears the restriction; Auto leaves the previously applied policy
+unchanged. The server maps it to `policies.factoryReset` with the same convention
+as the other capabilities (`true` = allowed). Existing configurations remain
+unmanaged, and changing the value changes the desired-state revision.
+
+The agent advertises `factoryReset` only as Device Owner, and uses
+`DISALLOW_FACTORY_RESET`. Android persists this restriction, and the normal
+config boot/self-update reapply path reapplies the saved desired state. Agents
+without this capability report unsupported rather than claiming protection.
+
+The `device.wipe` command remains available to the Device Owner; this feature
+restricts Settings and does not promise to block recovery-button resets. It does
+not configure FRP accounts or automatic re-enrollment.
+
+Deploy the new server (Liquibase adds a nullable `blockFactoryReset` column), web
+console, and agent versionCode 19 or newer. On a lab tablet, verify that Settings
+reset is blocked after On, remains blocked after reboot/Auto, and becomes
+available after Off. Verify remote wipe only on a device intentionally prepared
+for erasure; local checks do not execute a real wipe.
+
+References: [Android user restriction](https://developer.android.com/reference/android/os/UserManager#DISALLOW_FACTORY_RESET)
+and [AOSP Device Owner wipe handling](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android13-security-release/services/devicepolicy/java/com/android/server/devicepolicy/DevicePolicyManagerService.java).

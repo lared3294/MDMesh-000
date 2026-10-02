@@ -123,6 +123,9 @@ public class Configuration implements CustomerData, Serializable {
     @ApiModelProperty("Block application uninstallation by the user")
     private Boolean blockUserAppUninstall;
 
+    @ApiModelProperty("Block factory reset from device Settings; remote Device Owner wipe remains available")
+    private Boolean blockFactoryReset;
+
     @ApiModelProperty("Comma-separated app stores hidden when user installation is blocked; null uses Play and Galaxy Store")
     private String blockedAppStores;
     @ApiModelProperty("Flag indicating if auto-started apps should be kept in the foreground")
@@ -793,6 +796,10 @@ public class Configuration implements CustomerData, Serializable {
         this.blockUserAppInstall = blockUserAppInstall;
     }
 
+    public Boolean getBlockFactoryReset() { return blockFactoryReset; }
+
+    public void setBlockFactoryReset(Boolean blockFactoryReset) { this.blockFactoryReset = blockFactoryReset; }
+
     public Boolean getBlockUserAppUninstall() {
         return blockUserAppUninstall;
     }
@@ -963,6 +970,7 @@ public class Configuration implements CustomerData, Serializable {
         copy.setBlockedAppStores(getBlockedAppStores());
         copy.setBlockUserAppInstall(getBlockUserAppInstall());
         copy.setBlockUserAppUninstall(getBlockUserAppUninstall());
+        copy.setBlockFactoryReset(getBlockFactoryReset());
         copy.setAutostartForeground(getAutostartForeground());
         copy.setTimeZone(getTimeZone());
         copy.setAllowedClasses(getAllowedClasses());

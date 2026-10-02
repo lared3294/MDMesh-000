@@ -156,6 +156,22 @@ public class DesiredConfigBuilderTest {
         assertEquals(b.getRevision(), DesiredConfigBuilder.revision(a));
     }
 
+    @Test
+    public void factory_reset_is_opt_in_inverted_and_revisioned() {
+        Configuration cfg = kioskConfig();
+        DesiredConfig original = DesiredConfigBuilder.build(cfg, Collections.<Application>emptyList());
+        assertFalse(original.getPolicies().containsKey("factoryReset"));
+        cfg.setBlockFactoryReset(true);
+        DesiredConfig blocked = DesiredConfigBuilder.build(cfg, Collections.<Application>emptyList());
+        assertEquals(Boolean.FALSE, blocked.getPolicies().get("factoryReset"));
+        assertNotEquals(original.getRevision(), blocked.getRevision());
+        assertEquals(Boolean.TRUE, cfg.newCopy().getBlockFactoryReset());
+        cfg.setBlockFactoryReset(false);
+        DesiredConfig allowed = DesiredConfigBuilder.build(cfg, Collections.<Application>emptyList());
+        assertEquals(Boolean.TRUE, allowed.getPolicies().get("factoryReset"));
+        assertNotEquals(blocked.getRevision(), allowed.getRevision());
+    }
+
     /** GOLDEN: any change to canonicalisation changes every device's revision fleet-wide. Update deliberately. */
     @Test
     public void golden_canonical_json_and_revision() {

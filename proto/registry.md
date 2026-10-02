@@ -15,6 +15,7 @@ with the agent's capability advertisement and the server's command catalog.
 | `usbStorage` | block USB mass storage | 24 | |
 | `camera` | disable camera | 24 | |
 | `screenshots` | disable screenshots | 24 | |
+| `factoryReset` | allow/block factory reset from Settings | 24 | Device Owner; false blocks user reset, remote device.wipe remains available |
 | `userAppInstall` | allow/block user installation | 26 | Device Owner; config.apply / policy.apply, unknown sources + configured stores, MDM installs remain allowed |
 | `userAppUninstall` | allow/block user uninstallation | 26 | Device Owner; config.apply / policy.apply, per-package protection and targeted MDM removal |
 | `kioskLockTask` | COSU lock-task kiosk | 24 | setLockTaskPackages/Features |
