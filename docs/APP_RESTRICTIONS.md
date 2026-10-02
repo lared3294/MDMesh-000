@@ -128,6 +128,31 @@ menos una versión intermedia. Conservar registros por modelo y versión de One 
     comprobar desbloqueo antes de retirar la personalización.
 12. Revisar usuarios adicionales, depuración y tiendas distintas de las incluidas.
 
+## Diagnóstico de los callbacks de enrolamiento
+
+Si la instalación y el arranque normales funcionan pero el QR falla al preparar
+la configuración, probar los callbacks en una tablet de laboratorio con el agente
+debug como Device Owner. Esta prueba no reproduce la descarga, la verificación
+de Samsung ni todo el flujo del asistente de configuración.
+
+Compilar el APK de pruebas con la misma clave debug que firmó el agente instalado:
+
+```bash
+cd agent-android
+./gradlew :app:assembleDebugAndroidTest
+adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb shell am instrument -w -e class com.mdmesh.agent.provisioning.ProvisioningSmokeTest \
+  com.mdmesh.agent.debug.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+La prueba de modo verifica `RESULT_OK`, Fully Managed y la conservación de los
+extras. La de cumplimiento exige Device Owner y ejecuta el baseline real del QR
+(permisos, token local de recuperación de contraseña y ubicación), esperando
+`RESULT_OK`. No entrega un token de enrolamiento ni cambia el servidor configurado.
+Un resultado `OK (2 tests)` valida estos callbacks en la tablet; no confirma
+que el enrolamiento completo por QR funcione. Guardar también el logcat si falla.
+El APK de pruebas no se distribuye a la flota.
+
 ## Referencias Android
 
 - [Restricciones del usuario](https://developer.android.com/reference/android/os/UserManager)
