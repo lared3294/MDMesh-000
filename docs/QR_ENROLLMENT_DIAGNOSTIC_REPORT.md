@@ -1,4 +1,4 @@
-# QR enrollment: official certificate succeeds; local certificate fails
+# QR enrollment: Android 16 signing comparison and Android 8.1 success
 
 ## Environment and outcome
 
@@ -17,6 +17,28 @@ ADB works; both provisioning callback smoke tests passed on the Samsung. The
 explicit ADB enrollment helper completed server registration, and application
 restrictions and remote installation were tested successfully. The Settings
 factory-reset restriction also worked on the modified agent.
+
+## Additional hardware result (2026-10-05)
+
+The user reports successful QR enrollment on a Samsung SM-P585M running
+Android 8.1.0. The exact APK used for this successful attempt has not yet been
+confirmed. This contrasts with the SM-X236B / Android 16 failures above and
+means the observed failure is not universal across the tested Samsung devices.
+OS version, model, firmware and provisioning services differ; these two devices
+alone do not isolate Android version as the cause or identify a version cutoff.
+
+The reported policy results on the Android 8.1 device are `factoryReset:
+unsupported`; `screenshots`, `usbStorage`, `userAppInstall`, `userAppUninstall`
+and `location`: `applied`. These are reported statuses, not complete behavioral
+acceptance tests. The user also reports that policies do not work correctly
+with agent 0.1.15 build17; concrete affected behavior remains to be clarified.
+
+Build17 was the earlier non-debuggable provisioning probe. It predates the
+full application inventory (build18) and Settings factory-reset implementation
+(build19). The current `FactoryResetPolicy` supports API21+ Device Owner, so
+Android 8.1 by itself should not produce `unsupported` in that implementation.
+Confirm the installed APK/build, then test build19 with the same configuration
+before attributing the policy result to Samsung or Android compatibility.
 
 ## Controlled comparison
 
