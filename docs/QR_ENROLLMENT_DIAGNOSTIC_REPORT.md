@@ -1,4 +1,4 @@
-# QR enrollment: Android 16 signing comparison and Android 8.1 success
+# QR enrollment: Android 16 signing comparison and Android 8.1 / 13 success
 
 ## Environment and outcome
 
@@ -34,11 +34,23 @@ inventory (build18) and Settings factory-reset implementation (build19).
 The follow-up with build19 establishes successful enrollment and restrictions
 on Android 8.1; the earlier result does not establish an Android 8.1 limitation.
 
-This contrasts with the SM-X236B / Android 16 local-build failures above.
+The user additionally reports successful QR enrollment and working restrictions
+on a Samsung SM-A035M running Android 13, in the ongoing build19 test procedure.
+The APK hash was not independently captured for this device. As above, this is
+user-reported acceptance, not an exhaustive test of each policy and remote action.
+
+| Device | Android | QR with local agent | Restrictions |
+| --- | --- | --- | --- |
+| Samsung SM-P585M | 8.1.0 | Works (build19 confirmed) | Work, user-reported |
+| Samsung SM-A035M | 13 | Works, user-reported | Work, user-reported |
+| Samsung SM-X236B | 16 | Fails with tested local builds; official APK works | Work after ADB enrollment |
+
+These successes contrast with the SM-X236B / Android 16 local-build failures above.
 The observed QR failure is not universal across the tested Samsung devices.
-OS version, model, firmware and provisioning services differ; these two devices
+OS version, model, firmware and provisioning services differ; these three devices
 alone do not isolate Android version as the cause or identify a version cutoff.
-Local signing works for QR on the Android 8.1 device, while the controlled
+Local signing works for QR on the Android 8.1 device, and the ongoing Android 13
+test also succeeds, while the controlled
 Android 16 comparison still suggests an admission check associated with signing
 identity. The exact rejecting component remains unconfirmed.
 
