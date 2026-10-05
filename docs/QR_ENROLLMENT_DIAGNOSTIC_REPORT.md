@@ -20,25 +20,27 @@ factory-reset restriction also worked on the modified agent.
 
 ## Additional hardware result (2026-10-05)
 
-The user reports successful QR enrollment on a Samsung SM-P585M running
-Android 8.1.0. The exact APK used for this successful attempt has not yet been
-confirmed. This contrasts with the SM-X236B / Android 16 failures above and
-means the observed failure is not universal across the tested Samsung devices.
+The user confirmed that the modified agent build19 (`MDMesh-politicas-v19.apk`,
+versionName0.1.15/versionCode19, `com.mdmesh.agent.debug`, local signing
+certificate) completes QR enrollment from a factory-reset Samsung SM-P585M
+running Android 8.1.0. The user also confirmed that the restrictions work on
+this device. This is user-reported hardware acceptance, not a locally observed
+or exhaustive test of all policies, remote operations and reboot persistence.
+
+The earlier report listed `factoryReset: unsupported`, with `screenshots`,
+`usbStorage`, `userAppInstall`, `userAppUninstall` and `location` as `applied`.
+Build17 was an earlier provisioning probe, predating the full application
+inventory (build18) and Settings factory-reset implementation (build19).
+The follow-up with build19 establishes successful enrollment and restrictions
+on Android 8.1; the earlier result does not establish an Android 8.1 limitation.
+
+This contrasts with the SM-X236B / Android 16 local-build failures above.
+The observed QR failure is not universal across the tested Samsung devices.
 OS version, model, firmware and provisioning services differ; these two devices
 alone do not isolate Android version as the cause or identify a version cutoff.
-
-The reported policy results on the Android 8.1 device are `factoryReset:
-unsupported`; `screenshots`, `usbStorage`, `userAppInstall`, `userAppUninstall`
-and `location`: `applied`. These are reported statuses, not complete behavioral
-acceptance tests. The user also reports that policies do not work correctly
-with agent 0.1.15 build17; concrete affected behavior remains to be clarified.
-
-Build17 was the earlier non-debuggable provisioning probe. It predates the
-full application inventory (build18) and Settings factory-reset implementation
-(build19). The current `FactoryResetPolicy` supports API21+ Device Owner, so
-Android 8.1 by itself should not produce `unsupported` in that implementation.
-Confirm the installed APK/build, then test build19 with the same configuration
-before attributing the policy result to Samsung or Android compatibility.
+Local signing works for QR on the Android 8.1 device, while the controlled
+Android 16 comparison still suggests an admission check associated with signing
+identity. The exact rejecting component remains unconfirmed.
 
 ## Controlled comparison
 
