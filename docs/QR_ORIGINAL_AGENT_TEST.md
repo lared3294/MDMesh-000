@@ -57,3 +57,25 @@ managed device.
 Builds/signatures/components and the offline QR helper were checked locally.
 No hardware QR enrollment was executed here, and no production wipe/deploy was
 performed. Further feature work is deferred at the user's request.
+
+## Follow-up: original official binary
+
+The user tested both local baseline variants: same failure while preparing work
+setup. On 2026-10-05 the user supplied `https://mdm.asse.uy/files/agent.apk`.
+Its downloaded binary is version **0.3.1 / 301**, package `com.mdmesh.agent`,
+minSdk24/targetSdk35. `apksigner verify` passes with certificate DN
+`CN=MDMesh,O=MDMesh,C=US`, SHA-256
+`3f4b357285e895f0f0bd90fe5fa0cd1d530cdad55a48cf6888097d508302c5fc`.
+QR signature checksum: `P0s1coXolfDwvZD-X6DNHVMM2tVaSM9oiAl9UIMCxfw`.
+APK SHA-256: `78c1d05bd7e80c27769bd73804f6736436847128929afb95a35d073d14885aba`.
+
+The unmodified downloaded artifact is `MDMesh-oficial-asse.apk` outside the repo.
+`MDMesh-QR-oficial.html` generates a QR for a copy served from the modified
+server at `/files/mdmesh-oficial-asse.apk`, with a new token from that server.
+The normal console QR and deployment environment remain unchanged. Chromium
+checked the generated payload, certificate, download/server URLs, token extras
+and canvas, with no external requests. Hardware result is pending.
+
+Success would support investigating local identity/signing/approval **and** the
+source-version gap: baseline 0.1.15 is not this official 0.3.1 release. It must
+not be reported as proof that Google rejects the local signing certificate.
