@@ -118,3 +118,14 @@ not be conflated with DPC approval.
 This report contains no enrollment tokens, private keys or device credentials.
 It is prepared locally for review only; no issue, support request, APK submission
 or message has been published or sent to third parties.
+
+## Related upstream report
+
+Issue #26 reports a similar Samsung work-setup error and is closed with the
+comment "This appeared to be a certificate issue. Solved."
+https://github.com/MDMesh-app/MDMesh/issues/26
+https://github.com/MDMesh-app/MDMesh/issues/26#issuecomment-5791416024
+
+The comment does not specify HTTPS versus APK signing certificates or a fix.
+It is an antecedent to reference when sharing this comparison, not evidence
+that this locally signed-agent failure has already been diagnosed or resolved.
