@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { scanFromHistory, scanInstalledApps, latestAppChange, type AppInfo, type ScanSnapshot } from '../api/deviceApps';
-import { ACTION_TEMPLATES, listCommandHistory } from '../api/commands';
+import { scanFromHistory, scanInstalledApps, latestAppChange, appChangeAwaitingResult, type AppInfo, type ScanSnapshot } from '../api/deviceApps';
+import { ACTION_TEMPLATES, listCommandHistory, forceSync } from '../api/commands';
 import { fmtDateTime } from '../ui/format';
 
 export function DeviceAppsPanel({ device, onUninstall }: {
@@ -12,6 +12,7 @@ export function DeviceAppsPanel({ device, onUninstall }: {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [showSystem, setShowSystem] = useState(false);
+  const [awaitingResult, setAwaitingResult] = useState(false);
   const controller = useRef<AbortController | null>(null);
   const uninstall = ACTION_TEMPLATES.find((t) => t.key === 'app-uninstall')!;
 
@@ -27,7 +28,7 @@ export function DeviceAppsPanel({ device, onUninstall }: {
     try {
       const scan = await scanInstalledApps(device.number, request.signal);
       if (!request.signal.aborted) {
-        scannedAt.current = scan.scannedAt ?? 0;
+        scannedAt.current = scan.freshnessAt ?? scan.scannedAt ?? 0;
         setSnapshot(scan);
       }
     } catch (e) {
@@ -43,8 +44,10 @@ export function DeviceAppsPanel({ device, onUninstall }: {
     let timer: ReturnType<typeof setTimeout>;
     let initial = true;
     let lastAttempt: string | undefined;
+    let nextSyncAt = 0;
     scannedAt.current = 0;
     setSnapshot(null);
+    setAwaitingResult(false);
     setBusy(true);
     setError(null);
 
@@ -53,9 +56,16 @@ export function DeviceAppsPanel({ device, onUninstall }: {
         const history = await listCommandHistory(device.number, 0, monitor.signal);
         if (monitor.signal.aborted) return;
         const saved = scanFromHistory(history, true);
-        if (!controller.current && saved && (initial || (saved.scannedAt ?? 0) > scannedAt.current)) {
-          scannedAt.current = saved.scannedAt ?? 0;
+        if (!controller.current && saved && (initial || (saved.freshnessAt ?? saved.scannedAt ?? 0) > scannedAt.current)) {
+          scannedAt.current = saved.freshnessAt ?? saved.scannedAt ?? 0;
           setSnapshot(saved);
+        }
+        const awaiting = appChangeAwaitingResult(history, scannedAt.current);
+        setAwaitingResult(awaiting);
+        if (awaiting && Date.now() >= nextSyncAt) {
+          nextSyncAt = Date.now() + 15000;
+          await forceSync(device.number, monitor.signal).catch(() => undefined);
+          if (monitor.signal.aborted) return;
         }
         const changed = latestAppChange(history, scannedAt.current);
         if (changed && String(changed.id) !== lastAttempt && !controller.current) {
@@ -106,6 +116,7 @@ export function DeviceAppsPanel({ device, onUninstall }: {
       <p className="muted">Inventory for the Android user managed by MDMesh. Refresh requires the device to be online.</p>
       {snapshot && <p className="muted">{installed} user apps · {snapshot.apps.length - installed} system apps · Scanned {fmtDateTime(snapshot.scannedAt)}</p>}
       {busy && <p role="status">Waiting for inventory…</p>}
+      {awaitingResult && !busy && <p role="status">Waiting for the device to confirm the app change…</p>}
       {error && <p className="banner banner-alert" role="alert">{error}</p>}
       <div className="device-apps-filters">
         <input className="input" type="search" aria-label="Search installed apps" placeholder="Search by name or package" value={query} onChange={(e) => setQuery(e.target.value)} />

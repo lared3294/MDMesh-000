@@ -6,7 +6,7 @@ const { stripTypeScriptTypes } = require('node:module');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../../src/api/deviceApps.ts'), 'utf8');
 const code = stripTypeScriptTypes(source.replace(/^import .*;$/gm, '').replace(/^export /gm, ''));
 const api = {};
-vm.runInNewContext(code + '\nObject.assign(exports, { latestAppChange, scanFromHistory });', { exports: api });
+vm.runInNewContext(code + '\nObject.assign(exports, { latestAppChange, scanFromHistory, appChangeAwaitingResult });', { exports: api });
 const change = (id, type, status, completedAt) => ({ id, type, status, completedAt });
 
 test('queued, delivered, failed, unsupported and expired package commands do not refresh inventory', () => {
@@ -46,4 +46,38 @@ test('only completed full inventories replace the installed-app list', () => {
   assert.equal(saved.apps[0].pkg, 'com.example.hidden');
   assert.equal(saved.scannedAt, 100);
   assert.equal(api.scanFromHistory(history.slice(0, 3), true), null);
+});
+
+test('delivered installation requests a result sync even before a completion timestamp exists', () => {
+  const pending = { id: 20, type: 'app.install', status: 'delivered', createdAt: 120, deliveredAt: 130 };
+  assert.equal(api.appChangeAwaitingResult([pending], 100), true);
+  assert.equal(api.latestAppChange([pending], 100), undefined);
+  assert.equal(api.appChangeAwaitingResult([pending], 140), false);
+  assert.equal(api.appChangeAwaitingResult([{ ...pending, status: 'failed' }], 100), false);
+});
+test('scan freshness uses server request time, not delayed acknowledgement or browser time', () => {
+  const saved = api.scanFromHistory([{ id: 1, type: 'apps.scan', status: 'done',
+    createdAt: 100, completedAt: 300, detail: JSON.stringify({ includeAll: true, apps: [] }) }], true);
+  assert.equal(saved.freshnessAt, 100);
+  const installed = change(2, 'app.install', 'done', 200);
+  assert.equal(api.latestAppChange([installed], saved.freshnessAt), installed);
+});
+test('scan result is requested with a sync after delivery and uses server timestamps', async () => {
+  let synced = false;
+  let syncs = 0;
+  const exports = {};
+  const done = { id: 9, type: 'apps.scan', status: 'done', createdAt: 100, completedAt: 200,
+    detail: JSON.stringify({ includeAll: true, apps: [] }) };
+  vm.runInNewContext(code + '\nexports.scanInstalledApps = scanInstalledApps;', {
+    exports, setTimeout: (f) => f(),
+    queueCommand: async (device, req) => {
+      assert.equal(device, 'test-device'); assert.equal(req.type, 'apps.scan'); return { id: 9 };
+    },
+    listCommandHistory: async () => [synced ? done : { id: 9, status: 'delivered' }],
+    forceSync: async (device) => { assert.equal(device, 'test-device'); synced = true; syncs++; },
+  });
+  const result = await exports.scanInstalledApps('test-device');
+  assert.equal(syncs, 1);
+  assert.equal(result.scannedAt, 200);
+  assert.equal(result.freshnessAt, 100);
 });

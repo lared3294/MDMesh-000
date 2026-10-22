@@ -22,7 +22,13 @@ anterior del fork. Para cambiarla, usar Factory reset → Allow/Block en la cons
 La pestaña Applications consulta el historial cada cinco segundos. Cuando el
 dispositivo confirma con éxito una instalación o desinstalación posterior al
 último inventario, la consola solicita un inventario completo y actualiza la lista.
-También lo comprueba al volver a abrir la pestaña. Un comando pendiente o fallido
+También lo comprueba al volver a abrir la pestaña. Si una operación ya fue
+entregada pero su resultado sigue pendiente, solicita otra sincronización como
+máximo cada 15 segundos: el agente publica los resultados en el siguiente
+check-in. La espera de `apps.scan` usa el mismo mecanismo. La frescura del
+inventario se compara con el momento de solicitud registrado por el servidor,
+no con el reloj del navegador ni con una confirmación tardía del escaneo.
+Un comando pendiente o fallido
 no modifica la lista. Los escaneos manuales y automáticos no se superponen;
 si el escaneo falla, se puede reintentar con Refresh inventory.
 
