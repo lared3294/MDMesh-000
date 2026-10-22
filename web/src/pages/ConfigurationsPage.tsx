@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AppShell } from '../ui/AppShell';
 import { useToast } from '../ui/toast';
 import {
   getConfigurations,
+  getConfiguration,
   getConfigurationApps,
   saveConfiguration,
   deleteConfiguration,
@@ -16,6 +17,9 @@ import {
   PRIMARY_FIELDS,
   LEGACY_FIELDS,
   GROUP_ORDER,
+  GROUP_NOTES,
+  DEFAULT_SEGMENTS,
+  flagOffValue,
   type FieldDef,
 } from '../data/configFields';
 import { AppPicker } from '../components/AppPicker';
@@ -23,13 +27,23 @@ import { SyncBar } from '../components/SyncBar';
 import { KioskChangeConfirm, kioskAffectingChanges } from '../components/KioskChangeConfirm';
 
 // The seeded device-template defaults are locked: view-only, and used as bases
-// for new configs (start from scratch or from one of these).
-const DEFAULT_CONFIG_NAMES = new Set([
+// for new configs (start from scratch or from one of these). Both the fixed seed
+// id (the seed SQL inserts ids 1-3) and the seed name must match: a user config
+// that happens to reuse a seed name stays editable, and so does a seed row an admin
+// renamed through the API. This never locks more than the name-only check did.
+// A future seed rename must update both sets in the same release.
+const SEED_IDS: ReadonlySet<number> = new Set([1, 2, 3]);
+const SEED_NAMES: ReadonlySet<string> = new Set([
   'Managed Launcher',
   'MIUI (Xiaomi Redmi)',
   'Background (Agent) Mode',
 ]);
-const isLocked = (c: Configuration) => DEFAULT_CONFIG_NAMES.has(c.name);
+const isLocked = (c: Configuration) => c.id != null && SEED_IDS.has(c.id) && SEED_NAMES.has(c.name);
+
+/** The server flags a kiosk exit PIN that is a well-known default (absent on older servers). */
+const hasDefaultPin = (c: Configuration) => c.defaultKioskPin === true;
+/** Kiosk on with no exit PIN: anyone can leave kiosk mode without a prompt. */
+const hasNoPin = (c: Configuration) => c.kioskMode === true && !c.password;
 
 // The configurations INSERT sets every column explicitly, so NOT-NULL columns
 // can't fall back to their DB defaults — a blank config must supply them or the
@@ -48,7 +62,17 @@ const NEW_CONFIG_DEFAULTS: Partial<Configuration> = {
   useDefaultDesignSettings: true,
 };
 
-/** A fresh editable draft, optionally seeded from a base config. */
+/**
+ * The configuration to edit: GET /configurations/{id} (every column plus its files, app settings and usage
+ * parameters) with its assigned apps. The /configurations/search row lacks those lists, and a save replaces
+ * them on the server with what it is sent, so the editor never starts from a list row.
+ */
+async function loadFull(id: number): Promise<Configuration> {
+  const [full, applications] = await Promise.all([getConfiguration(id), getConfigurationApps(id)]);
+  return { ...full, applications };
+}
+
+/** A fresh editable draft, optionally seeded from a full base config (see loadFull). */
 function cloneForNew(base: Configuration | null): Configuration {
   if (!base) return { ...NEW_CONFIG_DEFAULTS, name: '', applications: [] } as Configuration;
   const c: Configuration = { ...base, name: `${base.name} copy` };
@@ -68,6 +92,41 @@ export function ConfigurationsPage() {
   const [chooserOpen, setChooserOpen] = useState(false);
   const [copyOf, setCopyOf] = useState<Configuration | null>(null);
   const [sync, setSync] = useState<Record<number, ConfigSyncSummary>>({});
+  const [watch, setWatch] = useState<{ id: number; until: number } | null>(null);
+  // Remounts the editor for every configuration it opens, so no draft carries over (e.g. Duplicate to edit).
+  const [editorKey, setEditorKey] = useState(0);
+  const [opening, setOpening] = useState(false);
+  const openSeq = useRef(0);
+
+  const startEditing = (c: Configuration, ro: boolean) => {
+    setReadOnly(ro);
+    setEditing(c);
+    setEditorKey((k) => k + 1);
+  };
+
+  /** Load the full configuration, then edit it (or start a new one from it). Nothing opens if the load fails. */
+  async function openConfig(c: Configuration, asTemplate: boolean) {
+    if (c.id == null) return;
+    const seq = ++openSeq.current;
+    setOpening(true);
+    try {
+      const full = await loadFull(c.id);
+      if (seq !== openSeq.current) return;
+      setChooserOpen(false);
+      if (asTemplate) startEditing(cloneForNew(full), false);
+      else startEditing(full, isLocked(c));
+    } catch (e) {
+      if (seq === openSeq.current) {
+        toast.push('err', 'Could not open the configuration', e instanceof Error ? e.message : '');
+      }
+    } finally {
+      if (seq === openSeq.current) setOpening(false);
+    }
+  }
+
+  const refreshSync = () => getSyncSummary()
+    .then((rows) => setSync(Object.fromEntries(rows.map((r) => [r.configurationId, r]))))
+    .catch(() => undefined);
 
   const load = () =>
     getConfigurations()
@@ -76,30 +135,52 @@ export function ConfigurationsPage() {
         setConfigs([]);
         setError('Could not load configurations.');
       })
-      .then(() => getSyncSummary().then((rows) => setSync(Object.fromEntries(rows.map((r) => [r.configurationId, r])))).catch(() => undefined));
+      .then(() => refreshSync());
 
   useEffect(() => {
     void load();
     listApplications().then((a) => setApps(a.filter((x) => (x.type ?? 'app') !== 'web'))).catch(() => undefined);
   }, []);
 
+  // A save returns before devices have applied the new desired state, so poll the saved
+  // configuration's sync summary for a short window: stop once its devices catch up or after
+  // two minutes (powered-off devices stay out of sync), and pause while the editor is open.
+  useEffect(() => {
+    if (!watch || editing) return;
+    let on = true;
+    let t: ReturnType<typeof setTimeout>;
+    // Self-scheduling poll: the next tick is armed only after the current one finishes.
+    const poll = async () => {
+      const rows = await getSyncSummary().catch(() => null);
+      if (!on) return;
+      if (rows) setSync(Object.fromEntries(rows.map((r) => [r.configurationId, r])));
+      const row = rows?.find((r) => r.configurationId === watch.id);
+      if ((rows && !row?.outOfSync) || Date.now() >= watch.until) {
+        setWatch(null);
+        return;
+      }
+      t = setTimeout(() => void poll(), 10_000);
+    };
+    t = setTimeout(() => void poll(), 10_000);
+    return () => { on = false; clearTimeout(t); };
+  }, [watch, editing]);
+
   if (editing) {
     return (
       <AppShell title="Configuration">
         <ConfigEditor
+          key={editorKey}
           initial={editing}
           apps={apps}
           readOnly={readOnly}
           deviceCount={editing.id != null ? affectedDeviceCount(sync[editing.id]) : 0}
           onCancel={() => setEditing(null)}
           onSaved={() => {
+            if (editing.id != null) setWatch({ id: editing.id, until: Date.now() + 120_000 });
             setEditing(null);
             void load();
           }}
-          onDuplicate={() => {
-            setEditing(cloneForNew(editing));
-            setReadOnly(false);
-          }}
+          onDuplicate={() => startEditing(cloneForNew(editing), false)}
         />
       </AppShell>
     );
@@ -129,10 +210,8 @@ export function ConfigurationsPage() {
               locked={isLocked(c)}
               appName={appNameForVersionId(apps, c.mainAppId as number | undefined)}
               sync={c.id != null ? sync[c.id] : undefined}
-              onEdit={() => {
-                setReadOnly(isLocked(c));
-                setEditing(c);
-              }}
+              busy={opening}
+              onEdit={() => void openConfig(c, false)}
               onCopy={() => setCopyOf(c)}
               onDelete={() => void doDelete(c)}
             />
@@ -154,10 +233,18 @@ export function ConfigurationsPage() {
       {chooserOpen && (
         <NewChooser
           defaults={(configs ?? []).filter(isLocked)}
-          onClose={() => setChooserOpen(false)}
+          busy={opening}
+          onClose={() => {
+            openSeq.current++; // a template still loading must not open after the chooser closed
+            setOpening(false);
+            setChooserOpen(false);
+          }}
           onPick={(base) => {
-            setEditing(cloneForNew(base));
-            setReadOnly(false);
+            if (base) {
+              void openConfig(base, true);
+              return;
+            }
+            startEditing(cloneForNew(null), false);
             setChooserOpen(false);
           }}
         />
@@ -208,6 +295,7 @@ function ConfigCard({
   locked,
   appName,
   sync,
+  busy,
   onEdit,
   onCopy,
   onDelete,
@@ -216,6 +304,8 @@ function ConfigCard({
   locked: boolean;
   appName: string;
   sync?: ConfigSyncSummary;
+  /** A configuration is being opened. */
+  busy: boolean;
   onEdit: () => void;
   onCopy: () => void;
   onDelete: () => void;
@@ -227,6 +317,12 @@ function ConfigCard({
         <div className="cfg-nm">{c.name}</div>
         {locked ? <span className="cfg-badge default">Default</span> : null}
         {c.kioskMode ? <span className="cfg-badge">Kiosk</span> : null}
+        {hasDefaultPin(c) ? (
+          <span className="cfg-badge warn" title="The kiosk exit PIN is a well-known default. Change it.">Default PIN</span>
+        ) : null}
+        {hasNoPin(c) ? (
+          <span className="cfg-badge warn" title="Kiosk mode has no exit PIN, so anyone can leave it. Set one.">No PIN</span>
+        ) : null}
       </div>
       {c.description ? <div className="cfg-desc">{String(c.description)}</div> : null}
       <div className="cfg-meta">
@@ -235,7 +331,7 @@ function ConfigCard({
       </div>
       <SyncBar s={sync} />
       <div className="cfg-actions">
-        <button className="btn btn-sm btn-primary" onClick={onEdit}>{locked ? 'View' : 'Edit'}</button>
+        <button className="btn btn-sm btn-primary" onClick={onEdit} disabled={busy}>{locked ? 'View' : 'Edit'}</button>
         <button className="btn btn-sm" onClick={onCopy}>{locked ? 'Use as template' : 'Copy'}</button>
         {!locked && <button className="btn btn-sm btn-danger" onClick={onDelete}>Delete</button>}
       </div>
@@ -245,10 +341,13 @@ function ConfigCard({
 
 function NewChooser({
   defaults,
+  busy,
   onClose,
   onPick,
 }: {
   defaults: Configuration[];
+  /** A base template is being loaded. */
+  busy: boolean;
   onClose: () => void;
   onPick: (base: Configuration | null) => void;
 }) {
@@ -258,12 +357,12 @@ function NewChooser({
         <h3>New configuration</h3>
         <p className="muted" style={{ margin: '2px 0 14px' }}>Start from scratch, or base it on a default template.</p>
         <div className="chooser-list">
-          <button className="chooser-opt" onClick={() => onPick(null)}>
+          <button className="chooser-opt" disabled={busy} onClick={() => onPick(null)}>
             <span className="chooser-nm">Blank configuration</span>
             <span className="chooser-sub">Empty template — set everything yourself.</span>
           </button>
           {defaults.map((d) => (
-            <button key={d.id} className="chooser-opt" onClick={() => onPick(d)}>
+            <button key={d.id} className="chooser-opt" disabled={busy} onClick={() => onPick(d)}>
               <span className="chooser-nm">Based on “{d.name}”</span>
               <span className="chooser-sub">Copy this default’s settings and apps, then customise.</span>
             </button>
@@ -332,49 +431,23 @@ function ConfigEditor({
   onDuplicate: () => void;
 }) {
   const toast = useToast();
+  // `initial` is the full configuration with its assigned apps (loadFull), or a new draft. The save sends
+  // the whole draft, so the server keeps every list and column the editor doesn't render.
   const [draft, setDraft] = useState<Configuration>(() => ({ ...initial }));
   // The unmodified starting point for change detection (e.g. kioskAffectingChanges).
-  // Kept separate from `initial` because the list endpoint omits `applications` —
-  // once the real assigned apps load, both `draft` and `baseline` are updated so
-  // comparisons don't see a spurious apps diff on every save.
-  const [baseline, setBaseline] = useState<Configuration>(() => ({ ...initial }));
+  const baseline = initial;
   const [advanced, setAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [confirmKeys, setConfirmKeys] = useState<string[] | null>(null);
   const isNew = initial.id == null;
 
-  // The list endpoint doesn't carry a config's assigned apps, so for an existing
-  // config we must fetch them here. Until they arrive, block save — otherwise a
-  // PUT (which replaces the whole app set) would wipe the config's apps.
-  // A failed fetch does NOT unblock save (fail closed): with desired state, saving an
-  // empty app set would also wipe the kiosk allowlist on every device. Offer a retry.
-  const [appsReady, setAppsReady] = useState(isNew);
-  const [appsError, setAppsError] = useState(false);
-  const [appsAttempt, setAppsAttempt] = useState(0);
-  useEffect(() => {
-    if (initial.id == null) return;
-    let cancelled = false;
-    setAppsError(false);
-    getConfigurationApps(initial.id)
-      .then((assigned) => {
-        if (cancelled) return;
-        setDraft((d) => ({ ...d, applications: assigned }));
-        setBaseline((b) => ({ ...b, applications: assigned }));
-        setAppsReady(true);
-      })
-      .catch(() => {
-        if (!cancelled) setAppsError(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [initial.id, appsAttempt]);
-
   const set = (key: string, value: unknown) => setDraft((d) => ({ ...d, [key]: value }));
 
   const allowed: ConfigApp[] = (draft.applications as ConfigApp[] | undefined) ?? [];
   const allowedIds = useMemo(() => new Set(allowed.map((a) => a.id)), [allowed]);
+  // Only an installed app that is shown in kiosk can be the main app.
+  const mainAppChoices = apps.filter((a) => allowed.some((x) => x.id === a.id && (x.action ?? 1) === 1 && x.showIcon !== false));
 
   function addApps(chosen: Application[]) {
     const entries: ConfigApp[] = chosen.map((app) => ({
@@ -396,14 +469,22 @@ function ConfigEditor({
   function setAppAction(id: number, action: number) {
     set('applications', allowed.map((a) => (a.id === id ? { ...a, action } : a)));
   }
+  function setAppKioskVisibility(id: number, showIcon: boolean) {
+    setDraft((d) => {
+      const assigned = (d.applications as ConfigApp[] | undefined) ?? [];
+      const changed = assigned.find((a) => a.id === id);
+      const applications = assigned.map((a) => (a.id === id ? { ...a, showIcon } : a));
+      // A hidden app cannot remain the kiosk's pinned main app. Clearing the stale
+      // selection makes the resulting launcher state explicit rather than silently
+      // granting it kiosk access again.
+      const mainAppId = !showIcon && changed?.usedVersionId === d.mainAppId ? null : d.mainAppId;
+      return { ...d, applications, mainAppId };
+    });
+  }
 
   function requestSave() {
     if (!String(draft.name ?? '').trim()) {
       toast.push('err', 'Name required', 'Give the configuration a name.');
-      return;
-    }
-    if (!appsReady) {
-      toast.push('err', 'Still loading', 'The assigned apps are still loading — try again in a moment.');
       return;
     }
     const keys = isNew ? [] : kioskAffectingChanges(baseline, draft);
@@ -436,6 +517,10 @@ function ConfigEditor({
     fields: LEGACY_FIELDS.filter((f) => f.group === g),
   })).filter((x) => x.fields.length > 0);
 
+  // The server marks a well-known default PIN; once the PIN is edited here that flag is stale.
+  const defaultPin = hasDefaultPin(draft) && (draft.password ?? '') === (baseline.password ?? '');
+  const noPin = hasNoPin(draft);
+
   return (
     <>
       <div className="crumb">
@@ -452,20 +537,11 @@ function ConfigEditor({
         {readOnly ? (
           <button className="btn btn-primary" onClick={onDuplicate}>Duplicate to edit</button>
         ) : (
-          <button className="btn btn-primary" onClick={requestSave} disabled={busy || !appsReady}>
-            {busy ? 'Saving…' : !appsReady && !appsError ? 'Loading…' : 'Save'}
+          <button className="btn btn-primary" onClick={requestSave} disabled={busy}>
+            {busy ? 'Saving…' : 'Save'}
           </button>
         )}
       </div>
-
-      {appsError && !appsReady ? (
-        <div className="banner banner-alert" role="alert" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span>Could not load this configuration’s assigned apps. Saving is disabled so the app list (and kiosk allowlist) is not wiped.</span>
-          <button className="btn btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setAppsAttempt((n) => n + 1)}>
-            Retry
-          </button>
-        </div>
-      ) : null}
 
       {confirmKeys ? (
         <KioskChangeConfirm
@@ -483,18 +559,50 @@ function ConfigEditor({
         </div>
       )}
 
+      {defaultPin && (
+        <div className="banner banner-warn" role="alert">
+          <b>Default kiosk exit PIN.</b>{' '}
+          {readOnly
+            ? 'Devices on this template use a well-known PIN, so anyone who knows it can leave kiosk mode. Duplicate it, set your own PIN, and move the devices to the copy.'
+            : 'This configuration uses a well-known PIN, so anyone who knows it can leave kiosk mode. Set your own under Kiosk → Kiosk exit PIN.'}
+        </div>
+      )}
+
+      {noPin && (
+        <div className="banner banner-warn" role="alert">
+          <b>No kiosk exit PIN.</b>{' '}
+          {readOnly
+            ? 'Devices on this template can leave kiosk mode without a PIN. Duplicate it, set a PIN, and move the devices to the copy.'
+            : 'Anyone can leave kiosk mode on these devices without a prompt. Set a PIN under Kiosk → Kiosk exit PIN.'}
+        </div>
+      )}
+
       {enforcedByGroup.map(({ group, fields }) => (
         <section className="panel cfg-panel" key={group}>
           <div className="cfg-sec-h">{group}</div>
+          {GROUP_NOTES[group] ? <p className="cfg-legacy-note">{GROUP_NOTES[group]}</p> : null}
           {fields.map((f) => (
-            <Field key={f.key} def={f} value={draft[f.key]} apps={apps} assigned={allowed} disabled={readOnly} onChange={(v) => set(f.key, v)} />
+            <Field
+              key={f.key}
+              def={f}
+              value={draft[f.key]}
+              stored={baseline[f.key]}
+              kioskOn={draft.kioskMode === true}
+              warn={f.key !== 'password' ? undefined
+                : defaultPin ? 'Well-known default PIN: change it.'
+                : noPin ? 'No PIN: anyone can leave kiosk. Set one.' : undefined}
+              apps={f.key === 'mainAppId' ? mainAppChoices : apps}
+              assigned={allowed}
+              disabled={readOnly}
+              onChange={(v) => set(f.key, v)}
+            />
           ))}
         </section>
       ))}
 
       <section className="panel cfg-panel">
         <div className="cfg-sec-h" style={{ display: 'flex', alignItems: 'center' }}>
-          <span>Allowed apps</span>
+          <span>Managed apps</span>
           {!readOnly && (
             <button className="btn btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setPickerOpen(true)}>
               Add apps
@@ -502,14 +610,16 @@ function ConfigEditor({
           )}
         </div>
         <p className="note" style={{ margin: '0 0 12px' }}>
-          App installs are queued when configuration apps are synced. To uninstall an app, use
-          Device control → Uninstall app. Other choices here stop configuration installs.
+          Apps this template installs on its devices. “Do not install” keeps an app listed without installing it.
+          “Remove” takes the app out of this configuration; it is not uninstalled from devices yet.
+          {draft.kioskMode === true ? ' “Show in kiosk” controls whether an installed app appears in the kiosk launcher.' : ''}
         </p>
         {allowed.length === 0 && <div className="cfg-empty">No apps assigned.</div>}
         {allowed.map((a) => (
           <div className="cfg-app" key={a.id}>
             <span className="cfg-app-nm">{a.name ?? a.pkg ?? `#${a.id}`}</span>
             <span className="cfg-app-pkg mono">{a.pkg}</span>
+            <span className="app-ver">{a.version ? `v${a.version}` : '—'}</span>
             <select
               className="sel"
               value={a.action ?? 1}
@@ -517,9 +627,20 @@ function ConfigEditor({
               onChange={(e) => setAppAction(a.id, Number(e.target.value))}
             >
               <option value={1}>Install</option>
-              <option value={2}>Do not install</option>
-              <option value={0}>Hide icon</option>
+              <option value={2}>Remove</option>
+              <option value={0}>Do not install</option>
             </select>
+            {draft.kioskMode === true && (
+              <label className="cfg-app-kiosk" title="Allow this installed app to appear and launch in kiosk mode">
+                <input
+                  type="checkbox"
+                  checked={a.showIcon !== false}
+                  disabled={readOnly || (a.action ?? 1) !== 1}
+                  onChange={(e) => setAppKioskVisibility(a.id, e.target.checked)}
+                />
+                Show in kiosk
+              </label>
+            )}
             {!readOnly && (
               <button className="btn btn-sm btn-ghost" onClick={() => removeApp(a.id)} aria-label="Remove app">✕</button>
             )}
@@ -528,10 +649,10 @@ function ConfigEditor({
       </section>
 
       <button className="cfg-adv-toggle" onClick={() => setAdvanced((v) => !v)}>
-        {advanced ? '▾' : '▸'} Legacy Headwind fields ({LEGACY_FIELDS.length}) — not applied by the MDMesh agent
+        {advanced ? '▾' : '▸'} Headwind launcher only (not used by the MDMesh agent) · {LEGACY_FIELDS.length}
       </button>
       {advanced && (
-        <p className="cfg-legacy-note">These fields are stored with the configuration but the MDMesh agent does not enforce them yet. They are kept for the built-in launcher and for future ports.</p>
+        <p className="cfg-legacy-note">Only the Headwind launcher read these settings; the MDMesh agent does not apply them. They stay stored with the configuration, and saving keeps their values.</p>
       )}
 
       {advanced &&
@@ -539,7 +660,7 @@ function ConfigEditor({
           <section className="panel cfg-panel" key={group}>
             <div className="cfg-sec-h">{group}</div>
             {fields.map((f) => (
-              <Field key={f.key} def={f} value={draft[f.key]} apps={apps} assigned={allowed} disabled={readOnly} onChange={(v) => set(f.key, v)} />
+              <Field key={f.key} def={f} value={draft[f.key]} stored={baseline[f.key]} apps={apps} assigned={allowed} disabled={readOnly} onChange={(v) => set(f.key, v)} />
             ))}
           </section>
         ))}
@@ -560,6 +681,9 @@ function ConfigEditor({
 function Field({
   def,
   value,
+  stored,
+  kioskOn,
+  warn,
   apps,
   assigned,
   disabled,
@@ -567,6 +691,10 @@ function Field({
 }: {
   def: FieldDef;
   value: unknown;
+  /** The value as loaded, before edits: a `flag` switched off restores a stored null. */
+  stored: unknown;
+  kioskOn?: boolean;
+  warn?: string;
   apps: Application[];
   assigned: ConfigApp[];
   disabled?: boolean;
@@ -577,16 +705,50 @@ function Field({
       <div className="cfg-field-label">
         <label>{def.label}</label>
         {def.enforced ? <span className="chip chip-enforced" title="Applied on devices by the MDMesh agent">Enforced</span> : null}
+        {def.kioskOnly ? (
+          <span
+            className={`chip chip-enforced chip-scope${kioskOn ? '' : ' off'}`}
+            title={kioskOn ? 'Applies only while kiosk mode is on' : 'Kiosk mode is off, so this has no effect until it is turned on'}
+          >
+            Applies in kiosk mode
+          </span>
+        ) : null}
+        {def.enrollQr ? (
+          <span className="chip chip-enforced chip-scope" title="Read by the Enroll page's QR code; not sent to devices">Enrollment QR</span>
+        ) : null}
         <span className="cfg-field-help">{def.help}</span>
+        {warn ? <span className="cfg-field-help cfg-field-warn">{warn}</span> : null}
       </div>
       <div className="cfg-field-ctl">
-        <FieldControl def={def} value={value} apps={apps} assigned={assigned} disabled={disabled} onChange={onChange} />
+        <FieldControl def={def} value={value} stored={stored} apps={apps} assigned={assigned} disabled={disabled} onChange={onChange} />
       </div>
     </div>
   );
 }
 
-function FieldControl({ def, value, apps, assigned, disabled, onChange }: { def: FieldDef; value: unknown; apps: Application[]; assigned: ConfigApp[]; disabled?: boolean; onChange: (v: unknown) => void }) {
+/** Password input with a show/hide toggle (the kiosk exit PIN must stay readable for admins). */
+function PasswordInput({ label, value, disabled, onChange }: { label: string; value: unknown; disabled?: boolean; onChange: (v: unknown) => void }) {
+  const [shown, setShown] = useState(false);
+  return (
+    <span className="cfg-reveal">
+      <input
+        className="input"
+        type={shown ? 'text' : 'password'}
+        value={value == null ? '' : String(value)}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        autoComplete="new-password"
+        spellCheck={false}
+        aria-label={label}
+      />
+      <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShown((v) => !v)} aria-pressed={shown}>
+        {shown ? 'Hide' : 'Show'}
+      </button>
+    </span>
+  );
+}
+
+function FieldControl({ def, value, stored, apps, assigned, disabled, onChange }: { def: FieldDef; value: unknown; stored: unknown; apps: Application[]; assigned: ConfigApp[]; disabled?: boolean; onChange: (v: unknown) => void }) {
   if (def.key === 'blockedAppStores') {
     return (
       <span>
@@ -601,16 +763,31 @@ function FieldControl({ def, value, apps, assigned, disabled, onChange }: { def:
       return (
         <input type="checkbox" className="dev-check" checked={value === true} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
       );
+    case 'flag': {
+      // null and false mean the same on the device; switching off never turns a stored null into false.
+      const set = (on: boolean) => onChange(on ? true : flagOffValue(stored));
+      const labels = def.flagLabels;
+      if (labels) {
+        return (
+          <span className="seg">
+            {[false, true].map((on) => (
+              <button key={String(on)} className={(value === true) === on ? 'on' : ''} aria-pressed={(value === true) === on} disabled={disabled} onClick={() => set(on)}>
+                {labels[on ? 1 : 0]}
+              </button>
+            ))}
+          </span>
+        );
+      }
+      return (
+        <input type="checkbox" className="dev-check" checked={value === true} disabled={disabled} onChange={(e) => set(e.target.checked)} aria-label={def.label} />
+      );
+    }
     case 'tri':
       return (
         <span className="seg">
-          {[
-            { v: null, l: 'Auto' },
-            { v: true, l: 'On' },
-            { v: false, l: 'Off' },
-          ].map((o) => (
-            <button key={String(o.v)} className={value === o.v || (o.v === null && value == null) ? 'on' : ''} disabled={disabled} onClick={() => onChange(o.v)}>
-              {o.l}
+          {(def.segments ?? DEFAULT_SEGMENTS).map((o) => (
+            <button key={String(o.value)} className={value === o.value || (o.value === null && value == null) ? 'on' : ''} aria-pressed={value === o.value || (o.value === null && value == null)} disabled={disabled} onClick={() => onChange(o.value)}>
+              {o.label}
             </button>
           ))}
         </span>
@@ -651,9 +828,20 @@ function FieldControl({ def, value, apps, assigned, disabled, onChange }: { def:
     case 'time':
       return <input className="input" type="time" value={value == null ? '' : String(value)} disabled={disabled} onChange={(e) => onChange(e.target.value || null)} />;
     case 'color':
-      return <input type="color" value={value ? String(value) : '#ffffff'} disabled={disabled} onChange={(e) => onChange(e.target.value)} />;
+      // Unset = the kiosk launcher's own default, so say "Default" instead of implying white.
+      return (
+        <span className="cfg-color">
+          <span className="cfg-color-v">{value ? String(value) : 'Default'}</span>
+          <input type="color" value={value ? String(value) : '#ffffff'} disabled={disabled} onChange={(e) => onChange(e.target.value)} aria-label={def.label} />
+          {value && !disabled ? (
+            <button type="button" className="btn btn-sm btn-ghost" onClick={() => onChange(null)} title="Use the kiosk launcher's default color">
+              Reset
+            </button>
+          ) : null}
+        </span>
+      );
     case 'password':
-      return <input className="input" type="password" value={value == null ? '' : String(value)} disabled={disabled} onChange={(e) => onChange(e.target.value)} autoComplete="new-password" />;
+      return <PasswordInput label={def.label} value={value} disabled={disabled} onChange={onChange} />;
     default:
       return <input className="input" type="text" value={value == null ? '' : String(value)} disabled={disabled} onChange={(e) => onChange(e.target.value)} />;
   }

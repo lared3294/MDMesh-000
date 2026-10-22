@@ -15,6 +15,8 @@ import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.sql.SQLException;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -24,6 +26,16 @@ import java.util.concurrent.ConcurrentHashMap;
  * reported applied revision differs from its configuration's current revision, queue ONE {@code config.apply}.
  * The document is rebuilt from the Configuration row each time (no stored revision to drift), using the
  * optimized app query (two plain selects per capable check-in — no temp table).
+ *
+ * <p>It is also re-sent when the device runs a different agent version than the one the last completed
+ * config.apply was queued for (a newer agent may support policy keys the old one reported {@code unsupported}),
+ * and keeps being re-sent until one queued for the new version comes back done (a failed or expired attempt
+ * keeps the normal backoff).</p>
+ *
+ * <p>A config.apply handed out before a check-in that carries no result for it is ended as abandoned, so it never
+ * holds back the configuration: the agent runs commands inside its check-in and reports them on the next one, so it
+ * restarted mid-apply or never got the response. At most one config.apply is open per device (a partial unique
+ * index); a check-in that loses the race to queue it just leaves it to the one that won.</p>
  */
 @Singleton
 public class ConfigReconciler {
@@ -52,22 +64,41 @@ public class ConfigReconciler {
         return d == null ? null : d.getRevision();
     }
 
-    /** @return true when a config.apply was enqueued. Never throws. */
-    public boolean reconcile(Device device, Set<String> deviceTokens, String appliedRevision, long now) {
+    /**
+     * @param agentVersion       the version the device reports in this check-in (null when unknown)
+     * @param configAgentVersion the version that last completed config.apply (null = no baseline yet)
+     * @param receivedAt         when this check-in reached the server, before its results were recorded: a
+     *                           config.apply delivered earlier and still open is not running on the device
+     * @return true when a config.apply was enqueued. Never throws.
+     */
+    public boolean reconcile(Device device, Set<String> deviceTokens, String appliedRevision,
+                             String agentVersion, String configAgentVersion, long now, long receivedAt) {
         try {
             // Cost short-circuit only: an old agent without the capability pays nothing (no config/app
             // query at all). ConfigReconcileDecision.decide still re-checks this same gate below.
             if (!AgentCapabilityTokens.isAllowed(DesiredConfigBuilder.CAPABILITY, deviceTokens)) return false;
             DesiredConfig doc = currentDocument(device);
             if (doc == null) return false;
-            // Steady state (device already applied this revision) must cost only the config + apps
-            // selects: skip the command-queue lookups entirely. decide() would return NOOP anyway.
-            if (doc.getRevision().equals(appliedRevision)) return false;
             String number = device.getNumber();
+            if (configAgentVersion == null && agentVersion != null) {
+                // First sighting: record a baseline only, so a server upgrade does not re-send to the whole fleet.
+                commandDAO.updateConfigAgentVersion(number, agentVersion);
+            }
+            boolean agentChanged = ConfigReconcileDecision.agentChanged(agentVersion, configAgentVersion);
+            // Steady state: skip the command-queue lookups (decide() would return NONE anyway).
+            if (doc.getRevision().equals(appliedRevision) && !agentChanged) return false;
+            // Checked only on drift (or an agent change): an in-sync device has nothing waiting on it.
+            if (commandDAO.abandonDelivered(number, DesiredConfigBuilder.COMMAND_TYPE, receivedAt, now,
+                    ConfigReconcileDecision.ABANDONED_DETAIL) > 0) {
+                logger.info("config.apply for {} ended: the agent checked in again without its result", number);
+            }
             boolean open = commandDAO.hasOpenOfType(number, DesiredConfigBuilder.COMMAND_TYPE);
-            AgentCommand latest = open ? null : commandDAO.findLatestOfType(number, DesiredConfigBuilder.COMMAND_TYPE);
-            if (ConfigReconcileDecision.decide(deviceTokens, doc.getRevision(), appliedRevision, open, latest, now)
-                    != ConfigReconcileDecision.Action.ENQUEUE) {
+            List<AgentCommand> recent = open ? Collections.<AgentCommand>emptyList()
+                    : commandDAO.listLatestOfType(number, DesiredConfigBuilder.COMMAND_TYPE, 2);
+            AgentCommand latest = recent.isEmpty() ? null : recent.get(0);
+            AgentCommand previous = recent.size() < 2 ? null : recent.get(1);
+            if (ConfigReconcileDecision.decide(deviceTokens, doc.getRevision(), appliedRevision, open, latest, previous,
+                    now, agentChanged) != ConfigReconcileDecision.Action.ENQUEUE) {
                 return false;
             }
             AgentCommand cmd = new AgentCommand();
@@ -75,10 +106,18 @@ public class ConfigReconciler {
             cmd.setType(DesiredConfigBuilder.COMMAND_TYPE);
             cmd.setPayload(DesiredConfigBuilder.toPayloadJson(doc));
             cmd.setRequiresCapability(DesiredConfigBuilder.CAPABILITY);
+            cmd.setAgentVersion(agentVersion);
             cmd.setStatus("pending");
             cmd.setCreatedAt(now);
-            commandDAO.insert(cmd);
-            logger.info("config.apply queued for {} (revision {} -> {})", number, appliedRevision, doc.getRevision());
+            try {
+                commandDAO.insert(cmd);
+            } catch (Exception e) {
+                if (!isUniqueViolation(e)) throw e;
+                logger.debug("config.apply for {} already queued by a concurrent check-in", number);
+                return false;
+            }
+            logger.info("config.apply queued for {} (revision {} -> {}, agent {})", number, appliedRevision,
+                    doc.getRevision(), agentChanged ? configAgentVersion + " -> " + agentVersion : agentVersion);
             return true;
         } catch (Exception e) {
             // A broken configuration fails on EVERY check-in of every device on it: WARN at most once
@@ -92,6 +131,14 @@ public class ConfigReconciler {
             }
             return false;
         }
+    }
+
+    /** The insert hit the one-open-config.apply-per-device index (PostgreSQL unique_violation). */
+    static boolean isUniqueViolation(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof SQLException && "23505".equals(((SQLException) t).getSQLState())) return true;
+        }
+        return false;
     }
 
     static final long WARN_INTERVAL_MS = 60_000L;

@@ -2,13 +2,14 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const ts = require('typescript');
+const { stripTypeScriptTypes } = require('node:module');
 
 // Test the existing pure verdict helper without adding a browser or another test framework.
 const source = fs.readFileSync(require('node:path').join(__dirname, '../../src/api/configSync.ts'), 'utf8');
-const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } });
+// Node 24 strips types directly; TypeScript 7 no longer exposes transpileModule.
+const outputText = stripTypeScriptTypes(source.replace(/^import .*;$/gm, '').replace(/^export /gm, ''));
 const moduleExports = {};
-vm.runInNewContext(outputText, { exports: moduleExports, require: () => ({ apiClient: {} }) });
+vm.runInNewContext(outputText + '\nexports.summarizeStatus = summarizeStatus;', { exports: moduleExports, apiClient: {} });
 const { summarizeStatus } = moduleExports;
 const status = (outcomes, revision = 'current') => ({
   configurationId: 1, supported: true, inSync: true, currentRevision: 'current', appliedRevision: 'current',
@@ -34,4 +35,8 @@ test('older agents and unconfigured devices keep their existing verdicts', () =>
 
 test('malformed outcomes do not crash the verdict helper', () => {
   assert.equal(summarizeStatus(status({ 'policies.userAppInstall': 123 })).label, 'In sync');
+});
+
+test('deferred settings preserve the current upstream verdict', () => {
+  assert.equal(summarizeStatus(status({ 'policies.wifiRadio': 'deferred: only network' })).label, 'In sync (some settings deferred)');
 });

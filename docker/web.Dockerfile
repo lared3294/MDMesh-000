@@ -2,7 +2,7 @@
 # The SPA calls the API at the same origin (apiClient base "/rest"), so it's deployment-agnostic —
 # no server URL is baked into the web bundle.
 
-FROM node:22-alpine AS web
+FROM node:24-alpine AS web
 WORKDIR /web
 # Release CI passes the agent's package + signing checksum (+ optional APK URL) so the in-product
 # enrollment QR matches the signed release APK. Defaults (in provisioning.ts) cover the debug build.
@@ -25,7 +25,7 @@ RUN npm run build
 # docker-images PR, and T0's edge check (scripts/edge-check.sh, which reads the image from this line) validates the
 # Caddyfile in every hosting mode against it before it can merge. The tag itself is still rebuilt upstream for
 # Alpine fixes.
-FROM caddy:2.11.4-alpine
+FROM caddy:2.11.7-alpine
 # Run Caddy unprivileged. It still needs to bind :80/:443 in own-domain mode, so grant just that capability
 # to the binary; /data (certs) and /config are mounted volumes that older deployments created root-owned,
 # so a tiny root entrypoint fixes their ownership and then su-execs to "caddy".
@@ -35,6 +35,7 @@ RUN apk add --no-cache libcap su-exec \
 COPY --from=web /web/dist /srv
 COPY docker/Caddyfile /etc/caddy/Caddyfile
 COPY docker/web-entrypoint.sh /web-entrypoint.sh
+COPY docker/edge-peers.sh /edge-peers.sh
 RUN chmod +x /web-entrypoint.sh && chown -R caddy:caddy /srv /etc/caddy /data /config
 EXPOSE 80 443
 ENTRYPOINT ["/web-entrypoint.sh"]

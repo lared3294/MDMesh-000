@@ -67,8 +67,8 @@ class AppRestrictionsTest {
             override fun showLauncher() = Unit
             override fun showOemHome() = Unit
         }
-        val applier = ConfigApplier(emptyMap(), KioskApplier(StubKioskController(),
-            InMemoryKioskStateStore(), home, ComponentName("a", "b")), {}, InMemoryConfigStateStore(), restrictions)
+        val applier = ConfigApplier(com.mdmesh.core.testing.fixedToggles(), KioskApplier(StubKioskController(),
+            InMemoryKioskStateStore(), home, ComponentName("a", "b")) { false }, {}, InMemoryConfigStateStore(), restrictions)
         val result = applier.apply(ConfigApplyPayload(revision = "r1", configurationId = 1,
             policies = installBlock + uninstallBlock, blockedAppStores = listOf("com.acme.other")))
         assertEquals(ConfigOutcome.APPLIED, result.outcomes["policies.userAppInstall"])

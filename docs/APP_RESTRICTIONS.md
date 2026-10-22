@@ -5,6 +5,18 @@ Esta personalización permite limitar aplicaciones en tablets Samsung Android
 MDMesh. Requiere actualizar **servidor, consola y agente**. Cambiar solo la
 consola no aplica restricciones en Android.
 
+## Actualización con upstream (22 de octubre de 2026)
+
+La rama `feat/user-app-restrictions` integra `upstream/main` en `431eb61`
+(incluye v0.3.6), conservando el inventario completo y la desinstalación
+confirmada. Las políticas se resuelven en cada operación para reconocer
+Device Owner después del enrolamiento; las instalaciones conservan la
+verificación de integridad y la espera de resultados del agente actual.
+
+El campo oficial `disableFactoryReset` tiene prioridad sobre el campo anterior
+`blockFactoryReset`. Si el oficial está vacío, se conserva la configuración
+anterior del fork. Para cambiarla, usar Factory reset → Allow/Block en la consola.
+
 ## Configuración
 
 En Configurations → Restrictions:

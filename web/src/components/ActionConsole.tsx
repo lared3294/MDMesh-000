@@ -5,8 +5,9 @@ import {
 } from '../api/commands';
 import { useToast } from '../ui/toast';
 import { KioskEnterModal } from './KioskEnterModal';
+import { DO_NOT_TRACK_HINT, useDoNotTrack } from '../api/locationTracking';
 
-type Device = { number: string };
+type Device = { number: string; configurationId?: number; description?: string };
 
 const GROUPS: Array<{ id: 'safe' | 'disruptive' | 'destructive'; title: string }> = [
   { id: 'safe', title: 'Actions' },
@@ -27,6 +28,10 @@ export function ActionConsole({ device, uninstallPackage, onUninstallOpened }: {
   const [confirmText, setConfirmText] = useState('');
   const [busy, setBusy] = useState(false);
   const [kioskOpen, setKioskOpen] = useState(false);
+  const doNotTrack = useDoNotTrack(device.configurationId);
+  /** Location-mode actions do nothing on a Do-not-track configuration (no location is read or stored). */
+  const blockedReason = (t: CommandTemplateExt): string | null =>
+    doNotTrack && t.request.type === 'device.locationMode' ? DO_NOT_TRACK_HINT : null;
 
   const refresh = useCallback(async () => {
     const [st, hist] = await Promise.all([
@@ -126,8 +131,8 @@ export function ActionConsole({ device, uninstallPackage, onUninstallOpened }: {
               <button
                 key={t.key}
                 className={`btn ${t.danger ? 'btn-danger' : ''}`}
-                disabled={busy}
-                title={t.description}
+                disabled={busy || blockedReason(t) != null}
+                title={blockedReason(t) ?? t.description}
                 onClick={() => { void onClick(t); }}
               >
                 {t.label}
@@ -151,6 +156,11 @@ export function ActionConsole({ device, uninstallPackage, onUninstallOpened }: {
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <div className="modal">
             <h3>{active.label}</h3>
+            {/* Name the device, so a destructive action can't be confirmed for the wrong one. */}
+            <p>
+              Device <strong className="mono">{device.number}</strong>
+              {device.description ? <> · {device.description}</> : null}
+            </p>
             <p className="muted">{active.description}</p>
             {active.key === 'app-uninstall' && <p>Device: <strong>{device.number}</strong></p>}
             {active.params?.map((p) => (

@@ -10,7 +10,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import com.mdmesh.core.config.AppRestrictions
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.withTimeout
+import com.mdmesh.core.di.DownloadHttpClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -28,7 +28,7 @@ data class ApkPart(
     val url: String? = null,
     /** Absolute path to an already-present APK on the device. */
     val localPath: String? = null,
-    /** Optional lowercase hex SHA-256 of this part; verified after fetch if present. */
+    /** Hex SHA-256 of this part; verified after fetch, and required when [InstallIntegrityPolicy.required]. */
     val sha256: String? = null,
 )
 
@@ -42,7 +42,7 @@ data class InstallRequest(
     val packageName: String,
     /** Requested version code; `null`/`0` means "any" (see [VersionPolicy]). */
     val versionCode: Long? = null,
-    /** Optional lowercase hex SHA-256 of the APK; verified after download if present. */
+    /** Hex SHA-256 of the APK; verified after download, and required when [InstallIntegrityPolicy.required]. */
     val sha256: String? = null,
     /** When true and the install succeeds, launch the app's main activity. */
     val runAfterInstall: Boolean = false,
@@ -56,6 +56,26 @@ data class InstallRequest(
     /** Normalized part list: the explicit [parts], or the single [url]/[localPath] as one part. */
     val apkParts: List<ApkPart>
         get() = if (parts.isNotEmpty()) parts else listOf(ApkPart(url, localPath, sha256))
+
+    /**
+     * Why this request must not be installed, or null when every part names its bytes with a well-formed
+     * hex SHA-256. A silent Device-Owner install never commits an APK it can't verify: the digest arrives
+     * over the authenticated check-in, so it also covers plain-http APK hosts on a LAN.
+     */
+    val integrityProblem: String?
+        get() = apkParts.withIndex().firstNotNullOfOrNull { (i, part) ->
+            val sha = part.sha256?.trim().orEmpty()
+            val where = part.url ?: part.localPath ?: "part $i"
+            when {
+                sha.isEmpty() -> "refused: no sha256 for $where (the server must send the APK's SHA-256)"
+                !SHA256_HEX.matches(sha) -> "refused: malformed sha256 for $where (expected 64 hex characters)"
+                else -> null
+            }
+        }
+
+    private companion object {
+        val SHA256_HEX = Regex("^[0-9a-fA-F]{64}$")
+    }
 }
 
 /** Result of an install/uninstall attempt. */
@@ -92,7 +112,8 @@ sealed interface InstallOutcome {
 class InstallManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val resultBus: InstallResultBus,
-    private val httpClient: OkHttpClient,
+    @DownloadHttpClient private val httpClient: OkHttpClient,
+    private val integrity: InstallIntegrityPolicy,
     private val appRestrictions: AppRestrictions,
 ) {
 
@@ -104,6 +125,9 @@ class InstallManager @Inject constructor(
      * install and awaits the platform's result. Returns the mapped [InstallOutcome].
      */
     suspend fun install(req: InstallRequest): InstallOutcome {
+        // 0. Integrity gate (when the server guarantees hashes) — refuse before any network or session work.
+        integrity.problem(req)?.let { return InstallOutcome.Failure(status = null, reason = it) }
+
         // 1. Version gate (pure) — skip / block before touching the network.
         when (val decision = VersionPolicy.shouldInstall(installedVersionCode(req.packageName), req.versionCode)) {
             VersionPolicy.Decision.Install -> Unit
@@ -116,7 +140,7 @@ class InstallManager @Inject constructor(
         }
 
         // 2. Obtain every part (single APK, or base + splits of a bundle), verifying each
-        // part's optional checksum. All parts install together in one session (step 3).
+        // part's checksum. All parts install together in one session (step 3).
         val parts = req.apkParts
         val fetched = ArrayList<FetchedApk>(parts.size)
         try {
@@ -124,7 +148,7 @@ class InstallManager @Inject constructor(
                 val file = runCatching { obtainPart(part) }
                     .getOrElse { return InstallOutcome.Failure(null, "apk fetch failed: ${it.message}") }
                 fetched += FetchedApk(file, downloaded = part.url != null)
-                part.sha256?.let { expected ->
+                part.sha256?.trim()?.let { expected ->
                     val actual = sha256Of(file)
                     if (!actual.equals(expected, ignoreCase = true)) {
                         return InstallOutcome.Failure(null, "checksum mismatch: expected $expected got $actual")
@@ -135,7 +159,7 @@ class InstallManager @Inject constructor(
             // 3. Create + write EVERY part into ONE session + commit, awaiting the broadcast result.
             val outcome = runCatching {
                 appRestrictions.managedInstall(req.packageName) {
-                    withTimeout(INSTALL_TIMEOUT_MS) { commitInstall(req.packageName, fetched.map { it.file }) }
+                    commitInstall(req.packageName, fetched.map { it.file })
                 }
             }
                 .getOrElse { return InstallOutcome.Failure(null, "install session error: ${it.message}") }
@@ -164,10 +188,10 @@ class InstallManager @Inject constructor(
         val sessionId = -(packageName.hashCode() and 0x7fff_ffff) - 1
         return try {
             appRestrictions.managedRemoval(packageName) {
-                withTimeout(INSTALL_TIMEOUT_MS) {
-                    packageInstaller.uninstall(packageName, resultSender(sessionId).intentSender)
-                    mapResult(resultBus.await(sessionId))
-                }
+                resultBus.expect(sessionId)
+                packageInstaller.uninstall(packageName, resultSender(sessionId).intentSender)
+                resultBus.await(sessionId, RESULT_TIMEOUT_MS)?.let(::mapResult)
+                    ?: InstallOutcome.Failure(null, "uninstall result timed out")
             }
         } catch (e: Exception) {
             InstallOutcome.Failure(null, "uninstall error: ${e.message}")
@@ -206,10 +230,17 @@ class InstallManager @Inject constructor(
                         }
                     }
                 }
+                resultBus.expect(sessionId)
                 session.commit(resultSender(sessionId).intentSender)
             }
 
-            mapResult(resultBus.await(sessionId))
+            resultBus.await(sessionId, RESULT_TIMEOUT_MS)?.let(::mapResult) ?: run {
+                // Never heard back. Abandoning frees the session if the platform still holds it open; it cannot stop
+                // a commit already under way, so the app may yet install after this failure is reported (the device's
+                // app list and, for the agent itself, its reported version then show it).
+                runCatching { packageInstaller.abandonSession(sessionId) }
+                InstallOutcome.Failure(null, "install result timed out")
+            }
         }
 
     /**
@@ -295,8 +326,6 @@ class InstallManager @Inject constructor(
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private companion object { const val INSTALL_TIMEOUT_MS = 5 * 60 * 1000L }
-
     private fun statusName(status: Int): String = when (status) {
         PackageInstaller.STATUS_FAILURE -> "FAILURE_UNKNOWN"
         PackageInstaller.STATUS_FAILURE_BLOCKED -> "FAILURE_BLOCKED"
@@ -306,5 +335,10 @@ class InstallManager @Inject constructor(
         PackageInstaller.STATUS_FAILURE_STORAGE -> "FAILURE_STORAGE"
         PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> "FAILURE_INCOMPATIBLE"
         else -> "STATUS_$status"
+    }
+
+    private companion object {
+        /** How long a committed session may take to report back before the install counts as failed. */
+        const val RESULT_TIMEOUT_MS = 10 * 60_000L
     }
 }
