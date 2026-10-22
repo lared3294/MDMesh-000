@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { getLatestScan, scanInstalledApps, type AppInfo, type ScanSnapshot } from '../api/deviceApps';
-import { ACTION_TEMPLATES } from '../api/commands';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { scanFromHistory, scanInstalledApps, latestAppChange, type AppInfo, type ScanSnapshot } from '../api/deviceApps';
+import { ACTION_TEMPLATES, listCommandHistory } from '../api/commands';
 import { fmtDateTime } from '../ui/format';
 
 export function DeviceAppsPanel({ device, onUninstall }: {
@@ -15,31 +15,75 @@ export function DeviceAppsPanel({ device, onUninstall }: {
   const controller = useRef<AbortController | null>(null);
   const uninstall = ACTION_TEMPLATES.find((t) => t.key === 'app-uninstall')!;
 
-  useEffect(() => {
-    let mounted = true;
-    setSnapshot(null);
-    setBusy(true);
-    setError(null);
-    void getLatestScan(device.number, true).then((scan) => {
-      if (mounted) { setSnapshot(scan); setBusy(false); }
-    });
-    return () => { mounted = false; controller.current?.abort(); };
-  }, [device.number]);
+  const scannedAt = useRef(0);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
+    // A manual refresh and the monitor share one scan, so they cannot overwrite each other.
+    if (controller.current) return;
     const request = new AbortController();
     controller.current = request;
     setBusy(true);
     setError(null);
     try {
       const scan = await scanInstalledApps(device.number, request.signal);
-      if (!request.signal.aborted) setSnapshot(scan);
+      if (!request.signal.aborted) {
+        scannedAt.current = scan.scannedAt ?? 0;
+        setSnapshot(scan);
+      }
     } catch (e) {
       if (!request.signal.aborted) setError(e instanceof Error ? e.message : 'Scan failed.');
     } finally {
+      if (controller.current === request) controller.current = null;
       if (!request.signal.aborted) setBusy(false);
     }
-  }
+  }, [device.number]);
+
+  useEffect(() => {
+    const monitor = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    let initial = true;
+    let lastAttempt: string | undefined;
+    scannedAt.current = 0;
+    setSnapshot(null);
+    setBusy(true);
+    setError(null);
+
+    const poll = async () => {
+      try {
+        const history = await listCommandHistory(device.number, 0, monitor.signal);
+        if (monitor.signal.aborted) return;
+        const saved = scanFromHistory(history, true);
+        if (!controller.current && saved && (initial || (saved.scannedAt ?? 0) > scannedAt.current)) {
+          scannedAt.current = saved.scannedAt ?? 0;
+          setSnapshot(saved);
+        }
+        const changed = latestAppChange(history, scannedAt.current);
+        if (changed && String(changed.id) !== lastAttempt && !controller.current) {
+          // Queueing, failure and unsupported results never invalidate the inventory.
+          // Retry a failed scan manually, or automatically after the next successful app change.
+          lastAttempt = String(changed.id);
+          await refresh();
+        }
+      } catch (e) {
+        if (initial && !monitor.signal.aborted) {
+          setError(e instanceof Error ? e.message : 'Could not load inventory.');
+        }
+      } finally {
+        if (!monitor.signal.aborted) {
+          if (initial && !controller.current) setBusy(false);
+          initial = false;
+          timer = setTimeout(() => void poll(), 5000);
+        }
+      }
+    };
+    void poll();
+    return () => {
+      monitor.abort();
+      clearTimeout(timer);
+      controller.current?.abort();
+      controller.current = null;
+    };
+  }, [device.number, refresh]);
 
   const term = query.trim().toLocaleLowerCase();
   const apps = (snapshot?.apps ?? []).filter((a) =>
@@ -80,7 +124,7 @@ export function DeviceAppsPanel({ device, onUninstall }: {
           </tr>;
         })}</tbody>
       </table>{!apps.length && <p>No applications match these filters.</p>}</div>}
-      <p className="muted">After installing or uninstalling an app, refresh the inventory to verify the result. Apps assigned Install in the configuration may be installed again by Install config apps.</p>
+      <p className="muted">The inventory refreshes automatically after a successful installation or uninstallation. Apps assigned Install in the configuration may be installed again by Install config apps.</p>
     </div>
   );
 }

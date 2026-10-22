@@ -1,4 +1,4 @@
-import { queueCommand, listCommandHistory, type QueueCommandRequest } from './commands';
+import { queueCommand, listCommandHistory, type QueueCommandRequest, type CommandHistoryItem } from './commands';
 
 // Device app inventory for the kiosk picker. The agent answers `apps.scan` / `apps.icons`
 // commands and returns the data as JSON in the command-result `detail`; we read it back from
@@ -60,7 +60,12 @@ export interface ScanSnapshot {
  * so the picker can show the saved list instantly instead of re-scanning every time.
  */
 export async function getLatestScan(deviceId: number | string, includeAll = false): Promise<ScanSnapshot | null> {
-  const hist = await listCommandHistory(deviceId).catch(() => []); // newest-first (id DESC)
+  const hist = await listCommandHistory(deviceId).catch(() => []);
+  return scanFromHistory(hist, includeAll);
+}
+
+/** Read a saved scan from a history response already fetched by the inventory monitor. */
+export function scanFromHistory(hist: CommandHistoryItem[], includeAll = false): ScanSnapshot | null {
   for (const scan of hist) {
     if (scan.type !== 'apps.scan' || scan.status !== 'done' || !scan.detail) continue;
     try {
@@ -118,4 +123,12 @@ export async function scanInstalledApps(deviceId: number | string, signal?: Abor
     throw new Error('Update the device agent to support the full installed-app inventory.');
   }
   return { ...parsed, scannedAt: Date.now() };
+}
+
+/** Only successful package changes newer than the inventory require another device scan. */
+export function latestAppChange(history: CommandHistoryItem[], scannedAt: number): CommandHistoryItem | undefined {
+  return history
+    .filter((c) => (c.type === 'app.install' || c.type === 'app.uninstall') &&
+      c.status === 'done' && (c.completedAt ?? 0) > scannedAt)
+    .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0))[0];
 }

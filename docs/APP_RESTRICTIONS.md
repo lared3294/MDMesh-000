@@ -17,6 +17,15 @@ El campo oficial `disableFactoryReset` tiene prioridad sobre el campo anterior
 `blockFactoryReset`. Si el oficial está vacío, se conserva la configuración
 anterior del fork. Para cambiarla, usar Factory reset → Allow/Block en la consola.
 
+## Refresco del inventario
+
+La pestaña Applications consulta el historial cada cinco segundos. Cuando el
+dispositivo confirma con éxito una instalación o desinstalación posterior al
+último inventario, la consola solicita un inventario completo y actualiza la lista.
+También lo comprueba al volver a abrir la pestaña. Un comando pendiente o fallido
+no modifica la lista. Los escaneos manuales y automáticos no se superponen;
+si el escaneo falla, se puede reintentar con Refresh inventory.
+
 ## Configuración
 
 En Configurations → Restrictions:
