@@ -12,6 +12,9 @@ Upgrading
 - The database adds one column (`devices.wipedAt`) on start. Devices wiped before the update aren't marked.
 
 New
+- Device Apps: scan all installed packages, including non-launchable and hidden apps. Each row offers confirmed
+  Uninstall and reversible Disable / Enable actions; the agent protects management, essential and kiosk apps.
+  Requires the updated agent. Disabling hides an app while retaining its package and data.
 - Settings → Users & roles: create, edit and delete console accounts, choose the devices and configurations each
   can reach, and edit roles and their permissions (thanks @lared3294).
 - A wiped device shows as **Wiped** instead of Online and then Offline, and is left out of the counts, Needs attention
@@ -19,6 +22,8 @@ New
 - Sync now and console commands say when the device isn't connected and will get it at its next check-in.
 
 Fixes
+- Device Apps refreshes after successful install, uninstall and visibility commands, using the page's existing
+  command-history poll. Delivered scans and app changes request result sync without waiting for the periodic check-in.
 - Audit log: on Docker installs, entries show the client's address instead of the edge container's (thanks
   @Przemek-Magic).
 
