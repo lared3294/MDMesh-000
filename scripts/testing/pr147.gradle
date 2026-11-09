@@ -1,0 +1,9 @@
+// Testing-only fallback; enrollment QR/server settings still take precedence.
+allprojects {
+    afterEvaluate { p ->
+        if (p.path == ':app') {
+            p.extensions.getByName('android').buildTypes.getByName('debug')
+                .buildConfigField('String', 'MDM_BASE_URL', '"https://mdm.testing.asse.uy/"')
+        }
+    }
+}
