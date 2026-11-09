@@ -7,6 +7,7 @@ import type { CommandHistoryItem } from '../api/commands';
 import { AppRoutes } from '../App';
 import { ROLES, renderInConsole, stubApi } from '../test/console';
 
+const LOAD = { timeout: 3000 };
 const DEVICE = { id: 7, number: 'WH-1', description: 'Front desk', configurationId: 3, lastUpdate: Date.now() };
 
 const scan = (id: number, status: string, apps?: unknown, detail?: string): CommandHistoryItem => ({
